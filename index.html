@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SamySchool — نظام إدارة السنتر</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=Tajawal:wght@400;500;700;900&display=swap');
+
+:root{
+  --red:#FF0000; --red-dark:#c40000; --cream:#faf6f1; --ink:#221e1c;
+  --charcoal:#1a1512; --muted:#8a7f78; --white:#ffffff; --border:#e9e0d6;
+  --green:#1a8a4a; --green-bg:#e7f6ec; --amber:#c07a00; --amber-bg:#fbf1de;
+  --rose:#d1332f; --rose-bg:#fbe9e8; --card-radius:14px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:'Tajawal',sans-serif; background:var(--cream); color:var(--ink);
+  direction:rtl;
+}
+#root{min-height:100vh;}
+.app{display:flex; min-height:100vh;}
+.sidebar{
+  width:230px; background:var(--charcoal); color:#fff; display:flex; flex-direction:column;
+  flex-shrink:0; position:sticky; top:0; height:100vh; overflow-y:auto;
+}
+.brand{display:flex; align-items:center; gap:10px; padding:22px 18px 16px; border-bottom:1px solid #33291f;}
+.brand-sub{font-size:11px; color:#c9beb3; margin-top:2px; letter-spacing:.3px;}
+.nav{padding:10px; display:flex; flex-direction:column; gap:4px; flex:1;}
+.nav button{
+  all:unset; cursor:pointer; padding:11px 14px; border-radius:10px; font-size:14.5px; font-weight:700;
+  color:#e6ddd3; display:flex; align-items:center; gap:10px; transition:background .15s, color .15s;
+}
+.nav button:hover{background:#2a221c;}
+.nav button.active{background:var(--red); color:#fff;}
+.nav-icon{font-size:16px; width:20px; text-align:center;}
+.sidebar-foot{padding:14px; border-top:1px solid #33291f; font-size:11px; color:#9b8f85;}
+.main{flex:1; min-width:0; padding:26px 30px 60px;}
+.topbar{display:flex; align-items:center; justify-content:space-between; margin-bottom:22px; flex-wrap:wrap; gap:12px;}
+.topbar h1{font-size:22px; margin:0;}
+.topbar .date{color:var(--muted); font-size:13px; margin-top:2px;}
+.btn{
+  border:none; border-radius:10px; padding:10px 16px; font-weight:800; font-size:13.5px; cursor:pointer;
+  font-family:inherit; display:inline-flex; align-items:center; gap:6px; transition:transform .1s, opacity .1s;
+}
+.btn:active{transform:scale(.97);}
+.btn-primary{background:var(--red); color:#fff;}
+.btn-primary:hover{background:var(--red-dark);}
+.btn-ghost{background:#fff; color:var(--ink); border:1.5px solid var(--border);}
+.btn-ghost:hover{background:#f4efe8;}
+.btn-sm{padding:6px 10px; font-size:12px; border-radius:8px;}
+.btn-danger{background:var(--rose-bg); color:var(--rose);}
+.card{background:#fff; border:1px solid var(--border); border-radius:var(--card-radius); padding:18px;}
+.grid{display:grid; gap:16px;}
+.grid-4{grid-template-columns:repeat(4,1fr);}
+.grid-3{grid-template-columns:repeat(3,1fr);}
+.grid-2{grid-template-columns:repeat(2,1fr);}
+@media(max-width:1000px){.grid-4{grid-template-columns:repeat(2,1fr);} .grid-3{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:640px){.grid-4,.grid-3,.grid-2{grid-template-columns:1fr;} .app{flex-direction:column;} .sidebar{width:100%; height:auto; position:relative; flex-direction:row; overflow-x:auto;} .nav{flex-direction:row;} .main{padding:16px;}}
+.stat-label{font-size:12.5px; color:var(--muted); font-weight:700;}
+.stat-value{font-size:26px; font-weight:900; margin-top:6px;}
+.stat-icon{font-size:20px; opacity:.7;}
+.section-title{font-size:16px; font-weight:900; margin:0 0 14px;}
+table{width:100%; border-collapse:collapse; font-size:13.5px;}
+th{text-align:right; color:var(--muted); font-weight:700; padding:9px 10px; border-bottom:2px solid var(--border); font-size:12.5px;}
+td{padding:10px; border-bottom:1px solid var(--border); vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+.badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:11.5px; font-weight:800;}
+.badge-green{background:var(--green-bg); color:var(--green);}
+.badge-amber{background:var(--amber-bg); color:var(--amber);}
+.badge-rose{background:var(--rose-bg); color:var(--rose);}
+.badge-gray{background:#f0ebe4; color:var(--muted);}
+input,select,textarea{
+  font-family:inherit; border:1.5px solid var(--border); border-radius:9px; padding:9px 11px; font-size:13.5px;
+  width:100%; background:#fff; color:var(--ink);
+}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--red); outline-offset:1px; border-color:var(--red);}
+label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; margin-bottom:5px;}
+.field{margin-bottom:12px;}
+.toolbar{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:16px;}
+.search{max-width:260px;}
+.modal-overlay{
+  position:fixed; inset:0; background:rgba(20,15,10,.55); display:flex; align-items:center; justify-content:center;
+  z-index:50; padding:16px;
+}
+.modal{background:#fff; border-radius:16px; padding:22px; width:100%; max-width:480px; max-height:88vh; overflow-y:auto;}
+.modal h2{margin:0 0 16px; font-size:18px;}
+.modal-actions{display:flex; gap:10px; justify-content:flex-start; margin-top:18px;}
+.empty{text-align:center; padding:40px 20px; color:var(--muted);}
+.empty-icon{font-size:34px; margin-bottom:10px;}
+.chip-row{display:flex; gap:8px; flex-wrap:wrap;}
+.chip{padding:7px 13px; border-radius:20px; border:1.5px solid var(--border); background:#fff; cursor:pointer; font-size:12.5px; font-weight:700; color:var(--ink);}
+.chip.active{background:var(--red); border-color:var(--red); color:#fff;}
+.att-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px;}
+.att-item{border:1.5px solid var(--border); border-radius:10px; padding:10px; display:flex; align-items:center; justify-content:space-between; gap:6px;}
+.att-item.present{border-color:var(--green); background:var(--green-bg);}
+.att-item.absent{border-color:var(--rose); background:var(--rose-bg);}
+.att-toggle{border:none; background:#fff; border-radius:7px; padding:5px 9px; font-size:11px; font-weight:800; cursor:pointer; border:1.5px solid var(--border);}
+.avatar{width:34px; height:34px; border-radius:50%; background:var(--red); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; flex-shrink:0;}
+.student-row{display:flex; align-items:center; gap:10px;}
+.link-btn{all:unset; cursor:pointer; color:var(--red); font-weight:800; font-size:13px;}
+.muted{color:var(--muted);}
+.small{font-size:12px;}
+.tag-row{display:flex; gap:6px; flex-wrap:wrap;}
+.print-only{display:none;}
+@media print{
+  .sidebar,.topbar,.toolbar,.no-print{display:none !important;}
+  .main{padding:0;}
+  .print-only{display:block;}
+  body{background:#fff;}
+}
+::-webkit-scrollbar{width:8px; height:8px;}
+::-webkit-scrollbar-thumb{background:#d8cec2; border-radius:8px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useMemo,useCallback} = React;
+
+const LOGO = (size) => (
+  <svg width={size} height={size*72/134} viewBox="0 0 134 72" xmlns="http://www.w3.org/2000/svg">
+    <text x="0" y="68" fontFamily="'Big Shoulders Display',sans-serif" fontWeight="900" fontSize="76" fill="#FF0000" textLength="56" lengthAdjust="spacingAndGlyphs">S</text>
+    <text x="54" y="40" fontFamily="'Big Shoulders Display',sans-serif" fontWeight="900" fontSize="36" fill="#ffffff" textLength="80" lengthAdjust="spacingAndGlyphs">amy</text>
+    <text x="54" y="68" fontFamily="'Big Shoulders Display',sans-serif" fontWeight="700" fontSize="22" fill="#faf6f1" textLength="80" lengthAdjust="spacingAndGlyphs">chool</text>
+  </svg>
+);
+
+const STAGES = ["روضة","ابتدائي 1","ابتدائي 2","ابتدائي 3","ابتدائي 4","ابتدائي 5","ابتدائي 6",
+  "إعدادي 1","إعدادي 2","إعدادي 3","ثانوي 1","ثانوي 2","ثانوي 3"];
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const todayISO = () => new Date().toISOString().slice(0,10);
+const monthKey = (d=new Date()) => d.toISOString().slice(0,7);
+const monthLabel = (mk) => {
+  const [y,m] = mk.split('-');
+  const names = ["يناير","فبراير","مارس","إبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+  return `${names[parseInt(m,10)-1]} ${y}`;
+};
+const fmtMoney = (n) => `${(n||0).toLocaleString('ar-EG')} ج.م`;
+const initials = (name) => (name||'').trim().split(' ').slice(0,2).map(w=>w[0]).join('');
+
+async function loadKey(key, fallback){
+  try{
+    const res = await window.storage.get(key, true);
+    if(res && res.value) return JSON.parse(res.value);
+    return fallback;
+  }catch(e){ return fallback; }
+}
+async function saveKey(key, value){
+  try{ await window.storage.set(key, JSON.stringify(value), true); }
+  catch(e){ console.error('storage save failed', key, e); }
+}
+
+const DEFAULT_TEACHERS = [
+  {id:'t-samy', name:'مستر محمد سامي', subject:'اللغة الإنجليزية'},
+  {id:'t-gouda', name:'مستر جودة النادي', subject:'الرياضيات'},
+  {id:'t-amer', name:'مستر عامر القرم', subject:'اللغة الألمانية'},
+];
+
+function Modal({title,onClose,children}){
+  return (
+    <div className="modal-overlay" onClick={(e)=>{if(e.target===e.currentTarget) onClose();}}>
+      <div className="modal">
+        <h2>{title}</h2>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Field({label,children}){
+  return <div className="field"><label>{label}</label>{children}</div>;
+}
+
+function Empty({icon,text}){
+  return <div className="empty"><div className="empty-icon">{icon}</div>{text}</div>;
+}
+
+function App(){
+  const [loaded,setLoaded] = useState(false);
+  const [tab,setTab] = useState('dashboard');
+  const [teachers,setTeachers] = useState([]);
+  const [groups,setGroups] = useState([]);
+  const [students,setStudents] = useState([]);
+  const [attendance,setAttendance] = useState([]);
+  const [grades,setGrades] = useState([]);
+  const [payments,setPayments] = useState([]);
+
+  useEffect(()=>{
+    (async()=>{
+      const [t,g,s,a,gr,p] = await Promise.all([
+        loadKey('ss_teachers', DEFAULT_TEACHERS),
+        loadKey('ss_groups', []),
+        loadKey('ss_students', []),
+        loadKey('ss_attendance', []),
+        loadKey('ss_grades', []),
+        loadKey('ss_payments', []),
+      ]);
+      setTeachers(t); setGroups(g); setStudents(s); setAttendance(a); setGrades(gr); setPayments(p);
+      if(t===DEFAULT_TEACHERS) saveKey('ss_teachers', DEFAULT_TEACHERS);
+      setLoaded(true);
+    })();
+  },[]);
+
+  const persistTeachers = (v)=>{ setTeachers(v); saveKey('ss_teachers', v); };
+  const persistGroups = (v)=>{ setGroups(v); saveKey('ss_groups', v); };
+  const persistStudents = (v)=>{ setStudents(v); saveKey('ss_students', v); };
+  const persistAttendance = (v)=>{ setAttendance(v); saveKey('ss_attendance', v); };
+  const persistGrades = (v)=>{ setGrades(v); saveKey('ss_grades', v); };
+  const persistPayments = (v)=>{ setPayments(v); saveKey('ss_payments', v); };
+
+  const groupById = useCallback((id)=> groups.find(g=>g.id===id), [groups]);
+  const teacherById = useCallback((id)=> teachers.find(t=>t.id===id), [teachers]);
+  const studentsInGroup = useCallback((gid)=> students.filter(s=>s.groupId===gid), [students]);
+
+  // payment status helper for a student in a given month
+  const paymentFor = (studentId, mk) => payments.find(p=>p.studentId===studentId && p.month===mk);
+  const isPaid = (studentId, mk) => { const p = paymentFor(studentId,mk); return p ? p.paid : false; };
+
+  const currentMonth = monthKey();
+  const overdueStudents = useMemo(()=>{
+    return students.filter(s=>{
+      if(!s.groupId) return false;
+      return !isPaid(s.id, currentMonth);
+    });
+  },[students,payments,currentMonth]);
+
+  const todayAttendanceRate = useMemo(()=>{
+    const todays = attendance.filter(a=>a.date===todayISO());
+    if(todays.length===0) return null;
+    let present=0,total=0;
+    todays.forEach(rec=>{
+      Object.values(rec.records||{}).forEach(v=>{ total++; if(v==='present') present++; });
+    });
+    if(total===0) return null;
+    return Math.round((present/total)*100);
+  },[attendance]);
+
+  const monthRevenue = useMemo(()=>{
+    return payments.filter(p=>p.month===currentMonth && p.paid).reduce((sum,p)=>sum+(Number(p.amount)||0),0);
+  },[payments,currentMonth]);
+
+  const monthPending = useMemo(()=>{
+    let total = 0;
+    students.forEach(s=>{
+      const g = groupById(s.groupId);
+      if(!g) return;
+      if(!isPaid(s.id, currentMonth)) total += Number(g.fee)||0;
+    });
+    return total;
+  },[students,payments,groups,currentMonth]);
+
+  const backup = () => {
+    const data = {teachers,groups,students,attendance,grades,payments,exportedAt:new Date().toISOString()};
+    const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `samyschool-backup-${todayISO()}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+  const restore = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try{
+        const data = JSON.parse(e.target.result);
+        if(data.teachers) persistTeachers(data.teachers);
+        if(data.groups) persistGroups(data.groups);
+        if(data.students) persistStudents(data.students);
+        if(data.attendance) persistAttendance(data.attendance);
+        if(data.grades) persistGrades(data.grades);
+        if(data.payments) persistPayments(data.payments);
+        alert('تم استرجاع النسخة الاحتياطية بنجاح');
+      }catch(err){ alert('ملف غير صالح'); }
+    };
+    reader.readAsText(file);
+  };
+
+  if(!loaded){
+    return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',fontWeight:800,color:'#8a7f78'}}>جارِ تحميل النظام...</div>;
+  }
+
+  const NAV = [
+    {id:'dashboard', label:'الرئيسية', icon:'⌂'},
+    {id:'students', label:'الطلاب', icon:'👤'},
+    {id:'groups', label:'المجموعات والمدرسين', icon:'👥'},
+    {id:'attendance', label:'الحضور والغياب', icon:'✓'},
+    {id:'grades', label:'الدرجات', icon:'✎'},
+    {id:'payments', label:'المصروفات', icon:'৳'},
+    {id:'reports', label:'التقارير الشهرية', icon:'▤'},
+  ];
+
+  return (
+    <div className="app">
+      <div className="sidebar no-print">
+        <div className="brand">
+          {LOGO(74)}
+        </div>
+        <div className="nav">
+          {NAV.map(n=>(
+            <button key={n.id} className={tab===n.id?'active':''} onClick={()=>setTab(n.id)}>
+              <span className="nav-icon">{n.icon}</span>{n.label}
+            </button>
+          ))}
+        </div>
+        <div className="sidebar-foot">
+          <div style={{marginBottom:8, fontWeight:800, color:'#cfc4b9'}}>نسخ احتياطي</div>
+          <button className="btn btn-ghost btn-sm" style={{width:'100%',marginBottom:6}} onClick={backup}>⭳ تنزيل نسخة احتياطية</button>
+          <label className="btn btn-ghost btn-sm" style={{width:'100%',display:'block',textAlign:'center',cursor:'pointer'}}>
+            ⭱ استرجاع نسخة
+            <input type="file" accept="application/json" style={{display:'none'}} onChange={(e)=>{ if(e.target.files[0]) restore(e.target.files[0]); }} />
+          </label>
+        </div>
+      </div>
+
+      <div className="main">
+        {tab==='dashboard' && <Dashboard {...{students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab}} />}
+        {tab==='students' && <StudentsTab {...{students,groups,persistStudents,payments,currentMonth,groupById,attendance}} />}
+        {tab==='groups' && <GroupsTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup}} />}
+        {tab==='attendance' && <AttendanceTab {...{groups,students,attendance,persistAttendance,studentsInGroup}} />}
+        {tab==='grades' && <GradesTab {...{groups,students,grades,persistGrades,studentsInGroup}} />}
+        {tab==='payments' && <PaymentsTab {...{students,groups,payments,persistPayments,groupById}} />}
+        {tab==='reports' && <ReportsTab {...{students,groups,attendance,grades,payments,groupById}} />}
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab}){
+  return (
+    <div>
+      <div className="topbar">
+        <div>
+          <h1>لوحة التحكم</h1>
+          <div className="date">{new Date().toLocaleDateString('ar-EG',{weekday:'long',year:'numeric',month:'long',day:'numeric'})} — {monthLabel(currentMonth)}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-4" style={{marginBottom:18}}>
+        <div className="card">
+          <div className="stat-label">إجمالي الطلاب</div>
+          <div className="stat-value">{students.length}</div>
+        </div>
+        <div className="card">
+          <div className="stat-label">المجموعات النشطة</div>
+          <div className="stat-value">{groups.length}</div>
+        </div>
+        <div className="card">
+          <div className="stat-label">نسبة الحضور اليوم</div>
+          <div className="stat-value">{todayAttendanceRate===null ? '—' : todayAttendanceRate+'%'}</div>
+        </div>
+        <div className="card">
+          <div className="stat-label">متأخرين في السداد</div>
+          <div className="stat-value" style={{color:'var(--rose)'}}>{overdueStudents.length}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-2" style={{marginBottom:18}}>
+        <div className="card">
+          <div className="stat-label">إيرادات {monthLabel(currentMonth)} (المحصّل)</div>
+          <div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(monthRevenue)}</div>
+        </div>
+        <div className="card">
+          <div className="stat-label">مبالغ متبقية هذا الشهر</div>
+          <div className="stat-value" style={{color:'var(--amber)'}}>{fmtMoney(monthPending)}</div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+          <div className="section-title" style={{margin:0}}>الطلاب المتأخرين في السداد — {monthLabel(currentMonth)}</div>
+          <button className="link-btn" onClick={()=>setTab('payments')}>عرض المصروفات ←</button>
+        </div>
+        {overdueStudents.length===0 ? <Empty icon="✓" text="لا يوجد طلاب متأخرين — الحمد لله" /> : (
+          <table>
+            <thead><tr><th>الطالب</th><th>المجموعة</th><th>المستوى</th><th>هاتف ولي الأمر</th><th>القسط الشهري</th></tr></thead>
+            <tbody>
+              {overdueStudents.slice(0,10).map(s=>{
+                const g = groupById(s.groupId);
+                return (
+                  <tr key={s.id}>
+                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
+                    <td>{g?g.name:'—'}</td>
+                    <td>{s.stage}</td>
+                    <td>{s.parentPhone||'—'}</td>
+                    <td>{g?fmtMoney(g.fee):'—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {overdueStudents.length>10 && <div className="small muted" style={{marginTop:8}}>و{overdueStudents.length-10} طالب آخر...</div>}
+      </div>
+    </div>
+  );
+}
+
+function StudentsTab({students,groups,persistStudents,payments,currentMonth,groupById,attendance}){
+  const [query,setQuery] = useState('');
+  const [filterGroup,setFilterGroup] = useState('all');
+  const [editing,setEditing] = useState(null); // student obj or 'new'
+
+  const filtered = students.filter(s=>{
+    const matchQ = s.name.toLowerCase().includes(query.toLowerCase()) || (s.phone||'').includes(query) || (s.parentPhone||'').includes(query);
+    const matchG = filterGroup==='all' || s.groupId===filterGroup;
+    return matchQ && matchG;
+  });
+
+  const openNew = () => setEditing({id:null,name:'',phone:'',parentPhone:'',stage:STAGES[0],groupId:groups[0]?groups[0].id:'',joinDate:todayISO(),notes:''});
+
+  const save = (data) => {
+    if(data.id){
+      persistStudents(students.map(s=>s.id===data.id?data:s));
+    }else{
+      persistStudents([...students, {...data, id:uid()}]);
+    }
+    setEditing(null);
+  };
+  const remove = (id) => {
+    if(confirm('تأكيد حذف الطالب؟ سيتم حذف كل بياناته من الحضور والدرجات والمدفوعات المرتبطة به يدوياً.')){
+      persistStudents(students.filter(s=>s.id!==id));
+    }
+  };
+
+  const attendanceRate = (studentId) => {
+    const recs = attendance.filter(a=>{
+      const st = students.find(x=>x.id===studentId);
+      return st && a.groupId===st.groupId && a.records && (studentId in a.records);
+    });
+    if(recs.length===0) return null;
+    const present = recs.filter(r=>r.records[studentId]==='present').length;
+    return Math.round((present/recs.length)*100);
+  };
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>الطلاب</h1><div className="date">{students.length} طالب مسجل</div></div>
+        <button className="btn btn-primary" onClick={openNew}>+ إضافة طالب جديد</button>
+      </div>
+
+      <div className="toolbar">
+        <input className="search" placeholder="ابحث بالاسم أو رقم الهاتف..." value={query} onChange={e=>setQuery(e.target.value)} />
+        <div className="chip-row">
+          <span className={"chip "+(filterGroup==='all'?'active':'')} onClick={()=>setFilterGroup('all')}>الكل</span>
+          {groups.map(g=><span key={g.id} className={"chip "+(filterGroup===g.id?'active':'')} onClick={()=>setFilterGroup(g.id)}>{g.name}</span>)}
+        </div>
+      </div>
+
+      <div className="card">
+        {filtered.length===0 ? <Empty icon="👤" text="لا يوجد طلاب مطابقين — أضف طالب جديد من الأعلى" /> : (
+          <table>
+            <thead><tr><th>الطالب</th><th>المجموعة</th><th>المستوى</th><th>هاتف ولي الأمر</th><th>نسبة الحضور</th><th>سداد {monthLabel(currentMonth)}</th><th></th></tr></thead>
+            <tbody>
+              {filtered.map(s=>{
+                const g = groupById(s.groupId);
+                const rate = attendanceRate(s.id);
+                const paid = payments.some(p=>p.studentId===s.id && p.month===currentMonth && p.paid);
+                return (
+                  <tr key={s.id}>
+                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
+                    <td>{g?g.name:<span className="muted">بدون مجموعة</span>}</td>
+                    <td>{s.stage}</td>
+                    <td>{s.parentPhone||'—'}</td>
+                    <td>{rate===null?<span className="muted">—</span>:<span className={"badge "+(rate>=80?'badge-green':rate>=50?'badge-amber':'badge-rose')}>{rate}%</span>}</td>
+                    <td>{paid?<span className="badge badge-green">تم السداد</span>:<span className="badge badge-rose">متأخر</span>}</td>
+                    <td>
+                      <div style={{display:'flex',gap:6}}>
+                        <button className="btn btn-ghost btn-sm" onClick={()=>setEditing(s)}>تعديل</button>
+                        <button className="btn btn-danger btn-sm" onClick={()=>remove(s.id)}>حذف</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {editing && (
+        <Modal title={editing.id?'تعديل بيانات الطالب':'إضافة طالب جديد'} onClose={()=>setEditing(null)}>
+          <StudentForm student={editing} groups={groups} onCancel={()=>setEditing(null)} onSave={save} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function StudentForm({student,groups,onCancel,onSave}){
+  const [f,setF] = useState(student);
+  const set = (k,v)=>setF({...f,[k]:v});
+  return (
+    <div>
+      <Field label="اسم الطالب"><input value={f.name} onChange={e=>set('name',e.target.value)} placeholder="الاسم بالكامل" /></Field>
+      <div className="grid grid-2">
+        <Field label="رقم هاتف الطالب"><input value={f.phone} onChange={e=>set('phone',e.target.value)} placeholder="01xxxxxxxxx" /></Field>
+        <Field label="رقم هاتف ولي الأمر"><input value={f.parentPhone} onChange={e=>set('parentPhone',e.target.value)} placeholder="01xxxxxxxxx" /></Field>
+      </div>
+      <div className="grid grid-2">
+        <Field label="المرحلة الدراسية">
+          <select value={f.stage} onChange={e=>set('stage',e.target.value)}>
+            {STAGES.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+        </Field>
+        <Field label="المجموعة">
+          <select value={f.groupId} onChange={e=>set('groupId',e.target.value)}>
+            <option value="">بدون مجموعة</option>
+            {groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="تاريخ الالتحاق"><input type="date" value={f.joinDate} onChange={e=>set('joinDate',e.target.value)} /></Field>
+      <Field label="ملاحظات"><textarea rows="3" value={f.notes} onChange={e=>set('notes',e.target.value)} placeholder="أي ملاحظات إضافية عن الطالب..." /></Field>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('من فضلك أدخل اسم الطالب');return;} onSave(f); }}>حفظ</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+      </div>
+    </div>
+  );
+}
+
+function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGroup}){
+  const [editingGroup,setEditingGroup] = useState(null);
+  const [editingTeacher,setEditingTeacher] = useState(null);
+
+  const saveGroup = (data) => {
+    if(data.id) persistGroups(groups.map(g=>g.id===data.id?data:g));
+    else persistGroups([...groups,{...data,id:uid()}]);
+    setEditingGroup(null);
+  };
+  const removeGroup = (id) => { if(confirm('تأكيد حذف المجموعة؟')) persistGroups(groups.filter(g=>g.id!==id)); };
+
+  const saveTeacher = (data) => {
+    if(data.id) persistTeachers(teachers.map(t=>t.id===data.id?data:t));
+    else persistTeachers([...teachers,{...data,id:uid()}]);
+    setEditingTeacher(null);
+  };
+  const removeTeacher = (id) => { if(confirm('تأكيد حذف المدرس؟')) persistTeachers(teachers.filter(t=>t.id!==id)); };
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>المجموعات والمدرسين</h1><div className="date">{groups.length} مجموعة — {teachers.length} مدرس</div></div>
+        <div style={{display:'flex',gap:10}}>
+          <button className="btn btn-ghost" onClick={()=>setEditingTeacher({id:null,name:'',subject:''})}>+ مدرس</button>
+          <button className="btn btn-primary" onClick={()=>setEditingGroup({id:null,name:'',teacherId:teachers[0]?teachers[0].id:'',stage:STAGES[0],schedule:'',fee:'',capacity:30})}>+ مجموعة جديدة</button>
+        </div>
+      </div>
+
+      <div className="grid grid-3" style={{marginBottom:20}}>
+        {groups.length===0 ? <div className="card" style={{gridColumn:'1/-1'}}><Empty icon="👥" text="لا توجد مجموعات بعد — أنشئ أول مجموعة دراسية" /></div> :
+          groups.map(g=>{
+            const t = teachers.find(x=>x.id===g.teacherId);
+            const count = studentsInGroup(g.id).length;
+            return (
+              <div className="card" key={g.id}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                  <div>
+                    <div style={{fontWeight:900,fontSize:15}}>{g.name}</div>
+                    <div className="small muted">{t?`${t.name} — ${t.subject}`:'بدون مدرس'}</div>
+                  </div>
+                  <span className={"badge "+(count>=g.capacity?'badge-rose':'badge-green')}>{count}/{g.capacity}</span>
+                </div>
+                <div className="small" style={{marginTop:10,lineHeight:1.9}}>
+                  <div>📚 {g.stage}</div>
+                  <div>🕐 {g.schedule||'—'}</div>
+                  <div>💵 {g.fee?fmtMoney(g.fee):'—'} / شهرياً</div>
+                </div>
+                <div style={{display:'flex',gap:6,marginTop:12}}>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setEditingGroup(g)}>تعديل</button>
+                  <button className="btn btn-danger btn-sm" onClick={()=>removeGroup(g.id)}>حذف</button>
+                </div>
+              </div>
+            );
+          })
+        }
+      </div>
+
+      <div className="card">
+        <div className="section-title">فريق المدرسين</div>
+        <table>
+          <thead><tr><th>الاسم</th><th>المادة</th><th>عدد المجموعات</th><th></th></tr></thead>
+          <tbody>
+            {teachers.map(t=>(
+              <tr key={t.id}>
+                <td>{t.name}</td>
+                <td>{t.subject}</td>
+                <td>{groups.filter(g=>g.teacherId===t.id).length}</td>
+                <td>
+                  <div style={{display:'flex',gap:6}}>
+                    <button className="btn btn-ghost btn-sm" onClick={()=>setEditingTeacher(t)}>تعديل</button>
+                    <button className="btn btn-danger btn-sm" onClick={()=>removeTeacher(t.id)}>حذف</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {editingGroup && (
+        <Modal title={editingGroup.id?'تعديل المجموعة':'مجموعة جديدة'} onClose={()=>setEditingGroup(null)}>
+          <GroupForm group={editingGroup} teachers={teachers} onCancel={()=>setEditingGroup(null)} onSave={saveGroup} />
+        </Modal>
+      )}
+      {editingTeacher && (
+        <Modal title={editingTeacher.id?'تعديل بيانات المدرس':'مدرس جديد'} onClose={()=>setEditingTeacher(null)}>
+          <TeacherForm teacher={editingTeacher} onCancel={()=>setEditingTeacher(null)} onSave={saveTeacher} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function GroupForm({group,teachers,onCancel,onSave}){
+  const [f,setF] = useState(group);
+  const set=(k,v)=>setF({...f,[k]:v});
+  return (
+    <div>
+      <Field label="اسم المجموعة"><input value={f.name} onChange={e=>set('name',e.target.value)} placeholder="مثال: إعدادي 3 - إنجليزي - سبت/إثنين" /></Field>
+      <div className="grid grid-2">
+        <Field label="المدرس">
+          <select value={f.teacherId} onChange={e=>set('teacherId',e.target.value)}>
+            {teachers.map(t=><option key={t.id} value={t.id}>{t.name} — {t.subject}</option>)}
+          </select>
+        </Field>
+        <Field label="المرحلة الدراسية">
+          <select value={f.stage} onChange={e=>set('stage',e.target.value)}>
+            {STAGES.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="موعد المجموعة"><input value={f.schedule} onChange={e=>set('schedule',e.target.value)} placeholder="مثال: سبت وإثنين 5-7 م" /></Field>
+      <div className="grid grid-2">
+        <Field label="الاشتراك الشهري (ج.م)"><input type="number" value={f.fee} onChange={e=>set('fee',e.target.value)} placeholder="300" /></Field>
+        <Field label="أقصى عدد للطلاب"><input type="number" value={f.capacity} onChange={e=>set('capacity',e.target.value)} placeholder="30" /></Field>
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المجموعة');return;} onSave({...f,fee:Number(f.fee)||0,capacity:Number(f.capacity)||30}); }}>حفظ</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+      </div>
+    </div>
+  );
+}
+
+function TeacherForm({teacher,onCancel,onSave}){
+  const [f,setF] = useState(teacher);
+  const set=(k,v)=>setF({...f,[k]:v});
+  return (
+    <div>
+      <Field label="اسم المدرس"><input value={f.name} onChange={e=>set('name',e.target.value)} /></Field>
+      <Field label="المادة"><input value={f.subject} onChange={e=>set('subject',e.target.value)} /></Field>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المدرس');return;} onSave(f); }}>حفظ</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+      </div>
+    </div>
+  );
+}
+
+function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup}){
+  const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
+  const [date,setDate] = useState(todayISO());
+  const [showHistory,setShowHistory] = useState(false);
+
+  useEffect(()=>{ if(!groupId && groups[0]) setGroupId(groups[0].id); },[groups]);
+
+  const roster = studentsInGroup(groupId);
+  const existing = attendance.find(a=>a.groupId===groupId && a.date===date);
+  const [records,setRecords] = useState(existing?existing.records:{});
+
+  useEffect(()=>{
+    const ex = attendance.find(a=>a.groupId===groupId && a.date===date);
+    setRecords(ex?{...ex.records}:{});
+  },[groupId,date,attendance]);
+
+  const toggle = (sid) => {
+    setRecords(r=>({...r, [sid]: r[sid]==='present' ? 'absent' : 'present'}));
+  };
+  const markAll = (status) => {
+    const r = {}; roster.forEach(s=>r[s.id]=status); setRecords(r);
+  };
+
+  const save = () => {
+    const rec = {id: existing?existing.id:uid(), groupId, date, records};
+    const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date));
+    persistAttendance([...others, rec]);
+    alert('تم حفظ الحضور بنجاح');
+  };
+
+  const history = attendance.filter(a=>a.groupId===groupId).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,15);
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>الحضور والغياب</h1><div className="date">سجّل حضور المجموعة في ثوانٍ</div></div>
+      </div>
+
+      <div className="toolbar">
+        <select style={{maxWidth:260}} value={groupId} onChange={e=>setGroupId(e.target.value)}>
+          {groups.length===0 && <option value="">لا توجد مجموعات</option>}
+          {groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+        <input type="date" style={{maxWidth:180}} value={date} onChange={e=>setDate(e.target.value)} />
+        <button className="btn btn-ghost btn-sm" onClick={()=>markAll('present')}>✓ تحديد الكل حاضر</button>
+        <button className="btn btn-ghost btn-sm" onClick={()=>markAll('absent')}>✕ تحديد الكل غائب</button>
+        <button className="btn btn-primary" style={{marginRight:'auto'}} onClick={save} disabled={!groupId || roster.length===0}>حفظ الحضور</button>
+      </div>
+
+      {!groupId || roster.length===0 ? (
+        <div className="card"><Empty icon="✓" text={groups.length===0 ? 'أضف مجموعة أولاً من تبويب المجموعات' : 'لا يوجد طلاب في هذه المجموعة بعد'} /></div>
+      ) : (
+        <div className="card">
+          <div className="section-title">{roster.length} طالب — {records && Object.values(records).filter(v=>v==='present').length} حاضر اليوم</div>
+          <div className="att-grid">
+            {roster.map(s=>{
+              const st = records[s.id];
+              return (
+                <div key={s.id} className={"att-item "+(st||'')}>
+                  <span className="small" style={{fontWeight:800}}>{s.name}</span>
+                  <button className="att-toggle" onClick={()=>toggle(s.id)}>
+                    {st==='present'?'حاضر ✓':st==='absent'?'غائب ✕':'—'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div style={{marginTop:18}}>
+        <button className="link-btn" onClick={()=>setShowHistory(!showHistory)}>{showHistory?'إخفاء':'عرض'} سجل الحصص السابقة ({history.length})</button>
+        {showHistory && (
+          <div className="card" style={{marginTop:10}}>
+            <table>
+              <thead><tr><th>التاريخ</th><th>حاضر</th><th>غائب</th><th>الإجمالي</th></tr></thead>
+              <tbody>
+                {history.map(h=>{
+                  const vals = Object.values(h.records||{});
+                  const p = vals.filter(v=>v==='present').length;
+                  const a = vals.filter(v=>v==='absent').length;
+                  return <tr key={h.id}><td>{h.date}</td><td><span className="badge badge-green">{p}</span></td><td><span className="badge badge-rose">{a}</span></td><td>{vals.length}</td></tr>;
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GradesTab({groups,students,grades,persistGrades,studentsInGroup}){
+  const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
+  const [creating,setCreating] = useState(null);
+
+  useEffect(()=>{ if(!groupId && groups[0]) setGroupId(groups[0].id); },[groups]);
+  const roster = studentsInGroup(groupId);
+  const groupExams = grades.filter(g=>g.groupId===groupId).sort((a,b)=>b.date.localeCompare(a.date));
+
+  const openNew = () => setCreating({id:null, groupId, name:'', date:todayISO(), maxScore:20, scores:{}});
+  const save = (data) => {
+    if(data.id) persistGrades(grades.map(g=>g.id===data.id?data:g));
+    else persistGrades([...grades,{...data,id:uid()}]);
+    setCreating(null);
+  };
+  const remove = (id) => { if(confirm('حذف هذا الاختبار؟')) persistGrades(grades.filter(g=>g.id!==id)); };
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>الدرجات</h1><div className="date">سجّل درجات الاختبارات والواجبات لكل مجموعة</div></div>
+        <button className="btn btn-primary" onClick={openNew} disabled={!groupId}>+ اختبار جديد</button>
+      </div>
+
+      <div className="toolbar">
+        <select style={{maxWidth:260}} value={groupId} onChange={e=>setGroupId(e.target.value)}>
+          {groups.length===0 && <option value="">لا توجد مجموعات</option>}
+          {groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+      </div>
+
+      {groupExams.length===0 ? <div className="card"><Empty icon="✎" text="لا توجد اختبارات مسجلة لهذه المجموعة بعد" /></div> : (
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          {groupExams.map(exam=>(
+            <div className="card" key={exam.id}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div><b>{exam.name}</b> <span className="muted small">— {exam.date} — من {exam.maxScore}</span></div>
+                <div style={{display:'flex',gap:6}}>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setCreating(exam)}>تعديل الدرجات</button>
+                  <button className="btn btn-danger btn-sm" onClick={()=>remove(exam.id)}>حذف</button>
+                </div>
+              </div>
+              <table>
+                <thead><tr><th>الطالب</th><th>الدرجة</th></tr></thead>
+                <tbody>
+                  {roster.map(s=>{
+                    const sc = exam.scores?.[s.id];
+                    const pct = sc!=null && exam.maxScore ? Math.round((sc/exam.maxScore)*100) : null;
+                    return <tr key={s.id}><td>{s.name}</td><td>{sc!=null?<span className={"badge "+(pct>=75?'badge-green':pct>=50?'badge-amber':'badge-rose')}>{sc} / {exam.maxScore}</span>:<span className="muted">لم تُدخل</span>}</td></tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {creating && (
+        <Modal title={creating.id?'تعديل درجات الاختبار':'اختبار جديد'} onClose={()=>setCreating(null)}>
+          <ExamForm exam={creating} roster={roster} onCancel={()=>setCreating(null)} onSave={save} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ExamForm({exam,roster,onCancel,onSave}){
+  const [f,setF] = useState(exam);
+  const setScore = (sid,val) => setF({...f, scores:{...f.scores, [sid]: val===''?undefined:Number(val)}});
+  return (
+    <div>
+      <div className="grid grid-2">
+        <Field label="اسم الاختبار"><input value={f.name} onChange={e=>setF({...f,name:e.target.value})} placeholder="مثال: اختبار وحدة 3" /></Field>
+        <Field label="التاريخ"><input type="date" value={f.date} onChange={e=>setF({...f,date:e.target.value})} /></Field>
+      </div>
+      <Field label="الدرجة النهائية"><input type="number" value={f.maxScore} onChange={e=>setF({...f,maxScore:Number(e.target.value)})} /></Field>
+      <label>درجات الطلاب</label>
+      <div style={{maxHeight:260,overflowY:'auto',border:'1px solid var(--border)',borderRadius:10,padding:10,marginTop:6}}>
+        {roster.length===0 ? <div className="muted small">لا يوجد طلاب في هذه المجموعة</div> : roster.map(s=>(
+          <div key={s.id} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+            <div style={{flex:1,fontSize:13}}>{s.name}</div>
+            <input type="number" style={{width:80}} value={f.scores?.[s.id] ?? ''} onChange={e=>setScore(s.id,e.target.value)} />
+          </div>
+        ))}
+      </div>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم الاختبار');return;} onSave(f); }}>حفظ</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+      </div>
+    </div>
+  );
+}
+
+function PaymentsTab({students,groups,payments,persistPayments,groupById}){
+  const [month,setMonth] = useState(monthKey());
+  const [filterGroup,setFilterGroup] = useState('all');
+  const [onlyOverdue,setOnlyOverdue] = useState(false);
+
+  const list = students.filter(s=>filterGroup==='all'||s.groupId===filterGroup);
+
+  const recordFor = (sid) => payments.find(p=>p.studentId===sid && p.month===month);
+
+  const togglePaid = (student) => {
+    const g = groupById(student.groupId);
+    const existing = recordFor(student.id);
+    if(existing){
+      persistPayments(payments.map(p=>p.id===existing.id ? {...p, paid: !p.paid, paidDate: !p.paid? todayISO() : null} : p));
+    }else{
+      persistPayments([...payments, {id:uid(), studentId:student.id, month, amount: g?g.fee:0, paid:true, paidDate:todayISO()}]);
+    }
+  };
+
+  const visibleList = list.filter(s=>{
+    if(!onlyOverdue) return true;
+    const r = recordFor(s.id);
+    return !(r && r.paid);
+  });
+
+  const totalCollected = list.reduce((sum,s)=>{ const r=recordFor(s.id); return sum + (r&&r.paid?Number(r.amount)||0:0); },0);
+  const totalExpected = list.reduce((sum,s)=>{ const g=groupById(s.groupId); return sum + (g?Number(g.fee)||0:0); },0);
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>متابعة المصروفات</h1><div className="date">تسجيل ومتابعة سداد الاشتراكات الشهرية</div></div>
+      </div>
+
+      <div className="grid grid-3" style={{marginBottom:18}}>
+        <div className="card"><div className="stat-label">إجمالي المتوقع — {monthLabel(month)}</div><div className="stat-value">{fmtMoney(totalExpected)}</div></div>
+        <div className="card"><div className="stat-label">تم تحصيله</div><div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(totalCollected)}</div></div>
+        <div className="card"><div className="stat-label">متبقي</div><div className="stat-value" style={{color:'var(--rose)'}}>{fmtMoney(totalExpected-totalCollected)}</div></div>
+      </div>
+
+      <div className="toolbar">
+        <input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} />
+        <select style={{maxWidth:220}} value={filterGroup} onChange={e=>setFilterGroup(e.target.value)}>
+          <option value="all">كل المجموعات</option>
+          {groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+        <span className={"chip "+(onlyOverdue?'active':'')} onClick={()=>setOnlyOverdue(!onlyOverdue)}>عرض المتأخرين فقط</span>
+      </div>
+
+      <div className="card">
+        {visibleList.length===0 ? <Empty icon="৳" text="لا يوجد طلاب مطابقين" /> : (
+          <table>
+            <thead><tr><th>الطالب</th><th>المجموعة</th><th>القسط</th><th>الحالة</th><th>تاريخ السداد</th><th></th></tr></thead>
+            <tbody>
+              {visibleList.map(s=>{
+                const g = groupById(s.groupId);
+                const r = recordFor(s.id);
+                const paid = r && r.paid;
+                return (
+                  <tr key={s.id}>
+                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
+                    <td>{g?g.name:'—'}</td>
+                    <td>{g?fmtMoney(g.fee):'—'}</td>
+                    <td>{paid?<span className="badge badge-green">تم السداد</span>:<span className="badge badge-rose">متأخر</span>}</td>
+                    <td className="small muted">{paid && r.paidDate ? r.paidDate : '—'}</td>
+                    <td><button className={"btn btn-sm "+(paid?'btn-ghost':'btn-primary')} onClick={()=>togglePaid(s)}>{paid?'إلغاء السداد':'تسجيل سداد'}</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReportsTab({students,groups,attendance,grades,payments,groupById}){
+  const [studentId,setStudentId] = useState(students[0]?students[0].id:'');
+  const [month,setMonth] = useState(monthKey());
+
+  useEffect(()=>{ if(!studentId && students[0]) setStudentId(students[0].id); },[students]);
+
+  const student = students.find(s=>s.id===studentId);
+  const group = student ? groupById(student.groupId) : null;
+
+  const monthAttendance = student ? attendance.filter(a=>a.groupId===student.groupId && a.date.startsWith(month) && a.records && (studentId in a.records)) : [];
+  const presentCount = monthAttendance.filter(a=>a.records[studentId]==='present').length;
+  const absentDates = monthAttendance.filter(a=>a.records[studentId]==='absent').map(a=>a.date);
+  const rate = monthAttendance.length ? Math.round((presentCount/monthAttendance.length)*100) : null;
+
+  const monthExams = student ? grades.filter(g=>g.groupId===student.groupId && g.date.startsWith(month)) : [];
+  const paymentRec = student ? payments.find(p=>p.studentId===studentId && p.month===month) : null;
+
+  return (
+    <div>
+      <div className="topbar no-print">
+        <div><h1>التقارير الشهرية</h1><div className="date">تقرير شامل لكل طالب — جاهز للطباعة أو المشاركة</div></div>
+        <button className="btn btn-primary" onClick={()=>window.print()} disabled={!student}>🖶 طباعة التقرير</button>
+      </div>
+
+      <div className="toolbar no-print">
+        <select style={{maxWidth:260}} value={studentId} onChange={e=>setStudentId(e.target.value)}>
+          {students.length===0 && <option value="">لا يوجد طلاب</option>}
+          {students.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} />
+      </div>
+
+      {!student ? <div className="card"><Empty icon="▤" text="أضف طالب أولاً لعرض تقريره" /></div> : (
+        <div className="card" id="report-card">
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,borderBottom:'2px solid var(--border)',paddingBottom:14}}>
+            <div style={{display:'flex',alignItems:'center',gap:12}}>
+              {LOGO(56)}
+              <div>
+                <div style={{fontWeight:900,fontSize:17}}>تقرير متابعة شهري</div>
+                <div className="small muted">{monthLabel(month)}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-2" style={{marginBottom:16}}>
+            <div><div className="small muted">اسم الطالب</div><div style={{fontWeight:800}}>{student.name}</div></div>
+            <div><div className="small muted">المرحلة الدراسية</div><div style={{fontWeight:800}}>{student.stage}</div></div>
+            <div><div className="small muted">المجموعة</div><div style={{fontWeight:800}}>{group?group.name:'—'}</div></div>
+            <div><div className="small muted">هاتف ولي الأمر</div><div style={{fontWeight:800}}>{student.parentPhone||'—'}</div></div>
+          </div>
+
+          <div className="grid grid-3" style={{marginBottom:16}}>
+            <div className="card"><div className="stat-label">نسبة الحضور</div><div className="stat-value">{rate===null?'—':rate+'%'}</div><div className="small muted">{monthAttendance.length} حصة هذا الشهر</div></div>
+            <div className="card"><div className="stat-label">متوسط الدرجات</div><div className="stat-value">{monthExams.length? Math.round(monthExams.reduce((s,e)=>s+((e.scores?.[studentId]||0)/(e.maxScore||1))*100,0)/monthExams.length)+'%' : '—'}</div><div className="small muted">{monthExams.length} اختبار</div></div>
+            <div className="card"><div className="stat-label">حالة السداد</div><div className="stat-value" style={{color:paymentRec&&paymentRec.paid?'var(--green)':'var(--rose)'}}>{paymentRec&&paymentRec.paid?'تم السداد':'متأخر'}</div><div className="small muted">{group?fmtMoney(group.fee):''}</div></div>
+          </div>
+
+          <div className="section-title">سجل الغياب</div>
+          {absentDates.length===0 ? <div className="muted small" style={{marginBottom:16}}>لا يوجد غياب مسجل هذا الشهر</div> : (
+            <div className="tag-row" style={{marginBottom:16}}>
+              {absentDates.map(d=><span key={d} className="badge badge-rose">{d}</span>)}
+            </div>
+          )}
+
+          <div className="section-title">درجات الاختبارات</div>
+          {monthExams.length===0 ? <div className="muted small">لا توجد اختبارات مسجلة هذا الشهر</div> : (
+            <table style={{marginBottom:8}}>
+              <thead><tr><th>الاختبار</th><th>التاريخ</th><th>الدرجة</th></tr></thead>
+              <tbody>
+                {monthExams.map(e=>(
+                  <tr key={e.id}><td>{e.name}</td><td>{e.date}</td><td>{e.scores?.[studentId] ?? '—'} / {e.maxScore}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {student.notes && (
+            <div style={{marginTop:16}}>
+              <div className="section-title">ملاحظات</div>
+              <div className="small">{student.notes}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
