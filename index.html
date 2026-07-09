@@ -115,11 +115,23 @@ label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; marg
 </style>
 </head>
 <body>
-<div id="root"></div>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script type="text/babel" data-presets="react">
+<div id="root"><div style="padding:60px 20px;text-align:center;color:#8a7f78;font-family:sans-serif;direction:rtl;">جارِ تحميل النظام... لو الشاشة فضلت كده أكتر من ثانيتين، يبقى فيه شبكة أو حاجب إعلانات بيمنع تحميل مكتبات البرنامج من الإنترنت.</div></div>
+<script>
+  window.addEventListener('error', function(e){
+    var root = document.getElementById('root');
+    if(root && !root.dataset.mounted){
+      root.innerHTML = '<div style="font-family:sans-serif;direction:rtl;max-width:560px;margin:60px auto;padding:24px;background:#fff;border:1px solid #e9e0d6;border-radius:14px;">' +
+        '<h2 style="color:#d1332f;margin-top:0;">تعذّر تحميل النظام</h2>' +
+        '<p>الصفحة محتاجة اتصال بالإنترنت عشان تحمّل مكتبات React في أول مرة تفتح فيها الملف.</p>' +
+        '<p style="color:#8a7f78;font-size:13px;">تفاصيل الخطأ: ' + (e.message || 'غير معروف') + '</p>' +
+        '<p>تأكد إن جهازك متصل بالإنترنت وجرّب تعمل تحديث للصفحة (F5).</p></div>';
+    }
+  });
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script type="text/plain" id="app-source">
 const {useState,useEffect,useMemo,useCallback} = React;
 
 const LOGO = (size) => (
@@ -143,6 +155,30 @@ const monthLabel = (mk) => {
 };
 const fmtMoney = (n) => `${(n||0).toLocaleString('ar-EG')} ج.م`;
 const initials = (name) => (name||'').trim().split(' ').slice(0,2).map(w=>w[0]).join('');
+
+// Fallback storage for when this file is opened directly in a browser (outside Claude.ai),
+// where window.storage isn't available. Uses localStorage on this device instead.
+if(!window.storage){
+  window.storage = {
+    get: async (key) => {
+      const v = localStorage.getItem('samyschool_'+key);
+      if(v===null) throw new Error('not found');
+      return {key, value:v};
+    },
+    set: async (key, value) => {
+      localStorage.setItem('samyschool_'+key, value);
+      return {key, value};
+    },
+    delete: async (key) => {
+      localStorage.removeItem('samyschool_'+key);
+      return {key, deleted:true};
+    },
+    list: async (prefix) => {
+      const keys = Object.keys(localStorage).filter(k=>k.startsWith('samyschool_'+(prefix||''))).map(k=>k.replace('samyschool_',''));
+      return {keys};
+    }
+  };
+}
 
 async function loadKey(key, fallback){
   try{
@@ -1014,7 +1050,25 @@ function ReportsTab({students,groups,attendance,grades,payments,groupById}){
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+try{
+  ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  document.getElementById('root').dataset.mounted = '1';
+}catch(err){
+  console.error(err);
+  document.getElementById('root').innerHTML = '<div style="font-family:sans-serif;direction:rtl;max-width:560px;margin:60px auto;padding:24px;background:#fff;border:1px solid #e9e0d6;border-radius:14px;"><h2 style="color:#d1332f;">حدث خطأ أثناء تشغيل النظام</h2><p style="color:#8a7f78;font-size:13px;">'+err.message+'</p></div>';
+}
+</script>
+<script>
+  try{
+    var src = document.getElementById('app-source').textContent;
+    var out = Babel.transform(src, {presets:[['react',{runtime:'classic'}]]}).code;
+    var s = document.createElement('script');
+    s.textContent = out;
+    document.body.appendChild(s);
+  }catch(err){
+    console.error(err);
+    document.getElementById('root').innerHTML = '<div style="font-family:sans-serif;direction:rtl;max-width:560px;margin:60px auto;padding:24px;background:#fff;border:1px solid #e9e0d6;border-radius:14px;"><h2 style="color:#d1332f;">حدث خطأ أثناء تحويل الكود</h2><p style="color:#8a7f78;font-size:13px;">'+err.message+'</p></div>';
+  }
 </script>
 </body>
 </html>
