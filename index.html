@@ -302,6 +302,7 @@ function App(){
   const [user,setUser] = useState(null);
   const [role,setRole] = useState(null);
   const [dataLoaded,setDataLoaded] = useState(false);
+  const [loadErrors,setLoadErrors] = useState([]);
   const [receiptData,setReceiptData] = useState(null);
   const [tab,setTab] = useState('dashboard');
   const [teachers,setTeachers] = useState([]);
@@ -340,12 +341,17 @@ function App(){
   useEffect(()=>{
     if(!user || !role) return;
     let pending = COLLECTIONS.length;
+    const settle = () => { if(pending>0){ pending--; if(pending===0) setDataLoaded(true); } };
     const setters = {teachers:setTeachers, groups:setGroups, students:setStudents, attendance:setAttendance, grades:setGrades, payments:setPayments, expenses:setExpenses, privateLessons:setPrivateLessons};
     const unsubs = COLLECTIONS.map(name=>
       db.collection(name).onSnapshot(snap=>{
         setters[name](snap.docs.map(d=>({id:d.id, ...d.data()})));
-        if(pending>0){ pending--; if(pending===0) setDataLoaded(true); }
-      }, err=>{ console.error(name, err); })
+        settle();
+      }, err=>{
+        console.error(name, err);
+        setLoadErrors(prev=> prev.includes(name)?prev:[...prev,name]);
+        settle(); // do not let one blocked collection hang the whole app forever
+      })
     );
     // seed default teachers if the collection is empty (first run)
     db.collection('teachers').get().then(snap=>{
@@ -453,6 +459,17 @@ function App(){
 
   if(!dataLoaded){
     return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',fontWeight:800,color:'#8a7f78'}}>جارِ تحميل البيانات...</div>;
+  }
+
+  if(loadErrors.length>0){
+    return (
+      <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',flexDirection:'column',gap:10,fontFamily:'Tajawal,sans-serif',padding:20,textAlign:'center'}}>
+        <div style={{fontWeight:900,color:'var(--rose)',fontSize:16}}>تعذّر تحميل بعض البيانات (مشكلة صلاحيات على الأرجح)</div>
+        <div className="small muted">الأقسام اللي فشلت: {loadErrors.join('، ')}</div>
+        <div className="small muted">تأكد إن قواعد Firestore (Rules) محدّثة وتحتوي على هذه الأقسام، ثم اضغط Publish وحدّث الصفحة.</div>
+        <button className="btn btn-ghost" onClick={()=>auth.signOut()}>تسجيل الخروج</button>
+      </div>
+    );
   }
 
   const isAdmin = role==='admin';
