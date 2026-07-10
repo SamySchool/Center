@@ -158,6 +158,15 @@ const LOGO = (size) => (
 const STAGES = ["روضة","ابتدائي 1","ابتدائي 2","ابتدائي 3","ابتدائي 4","ابتدائي 5","ابتدائي 6",
   "إعدادي 1","إعدادي 2","إعدادي 3","ثانوي 1","ثانوي 2","ثانوي 3"];
 
+const EDUCATION_TYPES = ["حكومي","لغات","تجريبي"];
+
+// A student expected monthly fee: their own override if set, otherwise the group fee.
+const studentFee = (student, group) => {
+  const ov = student && student.feeOverride;
+  if(ov!==undefined && ov!==null && ov!=='') return Number(ov)||0;
+  return group ? (Number(group.fee)||0) : 0;
+};
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const todayISO = () => new Date().toISOString().slice(0,10);
 const monthKey = (d=new Date()) => d.toISOString().slice(0,7);
@@ -273,7 +282,7 @@ function makePersist(name, stateRef, setter){
 }
 
 const DEFAULT_TEACHERS = [
-  {id:'t-samy', name:'مستر محمد سامي', subject:'اللغة الإنجليزية'},
+  {id:'t-samy', name:'مستر محمد سامي', subject:'اللغة الإنجليزية', isOwner:true},
   {id:'t-gouda', name:'مستر جودة النادي', subject:'الرياضيات'},
   {id:'t-amer', name:'مستر عامر القرم', subject:'اللغة الألمانية'},
 ];
@@ -340,10 +349,13 @@ function App(){
   // Live Firestore sync, only once signed in with a known role
   useEffect(()=>{
     if(!user || !role) return;
-    let pending = COLLECTIONS.length;
+    // "expenses" is admin-only by design (see Firestore rules) - secretary accounts
+    // should never even attempt to read it, so it is excluded from their subscription list.
+    const activeCollections = role==='admin' ? COLLECTIONS : COLLECTIONS.filter(c=>c!=='expenses');
+    let pending = activeCollections.length;
     const settle = () => { if(pending>0){ pending--; if(pending===0) setDataLoaded(true); } };
     const setters = {teachers:setTeachers, groups:setGroups, students:setStudents, attendance:setAttendance, grades:setGrades, payments:setPayments, expenses:setExpenses, privateLessons:setPrivateLessons};
-    const unsubs = COLLECTIONS.map(name=>
+    const unsubs = activeCollections.map(name=>
       db.collection(name).onSnapshot(snap=>{
         setters[name](snap.docs.map(d=>({id:d.id, ...d.data()})));
         settle();
@@ -363,6 +375,26 @@ function App(){
     });
     return ()=>unsubs.forEach(u=>u());
   },[user,role]);
+
+  // One-time auto-fix: mark the academy owner and apply the 70% commission to his
+  // colleagues groups automatically, so the admin never has to click through this by hand.
+  const migrationRanRef = React.useRef(false);
+  useEffect(()=>{
+    if(role!=='admin' || !dataLoaded || migrationRanRef.current) return;
+    if(teachers.length===0) return;
+    migrationRanRef.current = true;
+
+    const owner = teachers.find(t=>t.id==='t-samy' || t.name.includes('محمد سامي'));
+    if(owner && !owner.isOwner){
+      persistTeachers(teachers.map(t=>t.id===owner.id?{...t,isOwner:true}:t));
+    }
+
+    const commissionTeacherIds = teachers.filter(t=>t.id==='t-gouda' || t.id==='t-amer' || t.name.includes('جودة') || t.name.includes('عامر')).map(t=>t.id);
+    const needsFix = groups.some(g=>commissionTeacherIds.includes(g.teacherId) && Number(g.commissionPercent)!==70);
+    if(needsFix){
+      persistGroups(groups.map(g=> commissionTeacherIds.includes(g.teacherId) ? {...g, commissionPercent:70} : g));
+    }
+  },[role,dataLoaded,teachers,groups]);
 
   const persistTeachers = React.useCallback(makePersist('teachers', teachersRef, setTeachers),[]);
   const persistGroups = React.useCallback(makePersist('groups', groupsRef, setGroups),[]);
@@ -409,7 +441,7 @@ function App(){
     students.forEach(s=>{
       const g = groupById(s.groupId);
       if(!g) return;
-      if(!isPaid(s.id, currentMonth)) total += Number(g.fee)||0;
+      if(!isPaid(s.id, currentMonth)) total += studentFee(s,g);
     });
     return total;
   },[students,payments,groups,currentMonth]);
@@ -533,7 +565,7 @@ function App(){
         {tab==='grades' && <GradesTab {...{groups,students,grades,persistGrades,studentsInGroup,isAdmin}} />}
         {tab==='payments' && <PaymentsTab {...{students,groups,payments,persistPayments,groupById,setReceiptData,isAdmin}} />}
         {tab==='private' && <PrivateLessonsTab {...{teachers,privateLessons,persistPrivateLessons,isAdmin}} />}
-        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,attendance,payments,expenses,persistExpenses,groupById,currentMonth}} />}
+        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth}} />}
         {tab==='reports' && <ReportsTab {...{students,groups,attendance,grades,payments,groupById}} />}
       </div>
     </div>
@@ -649,7 +681,7 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
                     <td>{g?g.name:'—'}</td>
                     <td>{s.stage}</td>
                     <td>{s.parentPhone||'—'}</td>
-                    <td>{g?fmtMoney(g.fee):'—'}</td>
+                    <td>{fmtMoney(studentFee(s,g))}</td>
                   </tr>
                 );
               })}
@@ -673,13 +705,15 @@ function StudentsTab({students,groups,persistStudents,payments,currentMonth,grou
     return matchQ && matchG;
   });
 
-  const openNew = () => setEditing({id:null,name:'',phone:'',parentPhone:'',stage:STAGES[0],groupId:groups[0]?groups[0].id:'',joinDate:todayISO(),notes:''});
+  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',feeOverride:'',joinDate:todayISO(),notes:''});
 
   const save = (data) => {
-    if(data.id){
-      persistStudents(students.map(s=>s.id===data.id?data:s));
+    const {isNew, ...clean} = data;
+    const exists = students.some(s=>s.id===clean.id);
+    if(exists){
+      persistStudents(students.map(s=>s.id===clean.id?clean:s));
     }else{
-      persistStudents([...students, {...data, id:uid()}]);
+      persistStudents([...students, clean]);
     }
     setEditing(null);
   };
@@ -746,7 +780,7 @@ function StudentsTab({students,groups,persistStudents,payments,currentMonth,grou
       </div>
 
       {editing && (
-        <Modal title={editing.id?'تعديل بيانات الطالب':'إضافة طالب جديد'} onClose={()=>setEditing(null)}>
+        <Modal title={editing.isNew?'إضافة طالب جديد':'تعديل بيانات الطالب'} onClose={()=>setEditing(null)}>
           <StudentForm student={editing} groups={groups} onCancel={()=>setEditing(null)} onSave={save} />
         </Modal>
       )}
@@ -757,12 +791,38 @@ function StudentsTab({students,groups,persistStudents,payments,currentMonth,grou
 function StudentForm({student,groups,onCancel,onSave}){
   const [f,setF] = useState(student);
   const set = (k,v)=>setF({...f,[k]:v});
+  const qrRef = React.useRef(null);
+  const group = groups.find(g=>g.id===f.groupId);
+
+  useEffect(()=>{
+    if(!window.QRCode || !qrRef.current) return;
+    qrRef.current.innerHTML = '';
+    new QRCode(qrRef.current, {text: qrPayload(f.id), width:90, height:90, colorDark:'#221e1c', colorLight:'#ffffff'});
+  },[f.id]);
+
   return (
     <div>
+      <div className="card" style={{display:'flex',alignItems:'center',gap:14,marginBottom:16,background:'var(--cream)'}}>
+        <div ref={qrRef}></div>
+        <div>
+          <div className="small muted">كود الطالب (للحضور بالمسح)</div>
+          <div style={{fontWeight:900,fontSize:15}}>{studentCode(f.id)}</div>
+          <div className="small muted" style={{marginTop:4}}>هيتلزق على مذكرة الطالب من تبويب "أكواد الطلاب"</div>
+        </div>
+      </div>
+
       <Field label="اسم الطالب"><input value={f.name} onChange={e=>set('name',e.target.value)} placeholder="الاسم بالكامل" /></Field>
       <div className="grid grid-2">
         <Field label="رقم هاتف الطالب"><input value={f.phone} onChange={e=>set('phone',e.target.value)} placeholder="01xxxxxxxxx" /></Field>
         <Field label="رقم هاتف ولي الأمر"><input value={f.parentPhone} onChange={e=>set('parentPhone',e.target.value)} placeholder="01xxxxxxxxx" /></Field>
+      </div>
+      <div className="grid grid-2">
+        <Field label="اسم مدرسة الطالب"><input value={f.schoolName} onChange={e=>set('schoolName',e.target.value)} placeholder="مثال: مدرسة النصر الإعدادية" /></Field>
+        <Field label="نوع التعليم">
+          <select value={f.educationType} onChange={e=>set('educationType',e.target.value)}>
+            {EDUCATION_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+        </Field>
       </div>
       <div className="grid grid-2">
         <Field label="المرحلة الدراسية">
@@ -777,6 +837,9 @@ function StudentForm({student,groups,onCancel,onSave}){
           </select>
         </Field>
       </div>
+      <Field label={`الاشتراك الشهري لهذا الطالب (ج.م) — سيب فاضي لاستخدام سعر المجموعة${group?' ('+fmtMoney(group.fee)+')':''}`}>
+        <input type="number" value={f.feeOverride} onChange={e=>set('feeOverride',e.target.value)} placeholder={group?String(group.fee):'0'} />
+      </Field>
       <Field label="تاريخ الالتحاق"><input type="date" value={f.joinDate} onChange={e=>set('joinDate',e.target.value)} /></Field>
       <Field label="ملاحظات"><textarea rows="3" value={f.notes} onChange={e=>set('notes',e.target.value)} placeholder="أي ملاحظات إضافية عن الطالب..." /></Field>
       <div className="modal-actions">
@@ -812,7 +875,7 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
         {isAdmin && (
           <div style={{display:'flex',gap:10}}>
             <button className="btn btn-ghost" onClick={()=>setEditingTeacher({id:null,name:'',subject:''})}>+ مدرس</button>
-            <button className="btn btn-primary" onClick={()=>setEditingGroup({id:null,name:'',teacherId:teachers[0]?teachers[0].id:'',stage:STAGES[0],schedule:'',fee:'',capacity:30,commissionPercent:50})}>+ مجموعة جديدة</button>
+            <button className="btn btn-primary" onClick={()=>setEditingGroup({id:null,name:'',teacherId:teachers[0]?teachers[0].id:'',stage:STAGES[0],schedule:'',fee:'',capacity:30,commissionPercent:70})}>+ مجموعة جديدة</button>
           </div>
         )}
       </div>
@@ -909,9 +972,9 @@ function GroupForm({group,teachers,onCancel,onSave}){
         <Field label="الاشتراك الشهري (ج.م)"><input type="number" value={f.fee} onChange={e=>set('fee',e.target.value)} placeholder="300" /></Field>
         <Field label="أقصى عدد للطلاب"><input type="number" value={f.capacity} onChange={e=>set('capacity',e.target.value)} placeholder="30" /></Field>
       </div>
-      <Field label="نسبة المدرس من إيرادات المجموعة (%)"><input type="number" min="0" max="100" value={f.commissionPercent ?? 50} onChange={e=>set('commissionPercent',e.target.value)} placeholder="50" /></Field>
+      <Field label="نسبة المدرس من إيرادات المجموعة (%)"><input type="number" min="0" max="100" value={f.commissionPercent ?? 70} onChange={e=>set('commissionPercent',e.target.value)} placeholder="70" /></Field>
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المجموعة');return;} onSave({...f,fee:Number(f.fee)||0,capacity:Number(f.capacity)||30,commissionPercent:Number(f.commissionPercent ?? 50)}); }}>حفظ</button>
+        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المجموعة');return;} onSave({...f,fee:Number(f.fee)||0,capacity:Number(f.capacity)||30,commissionPercent:Number(f.commissionPercent ?? 70)}); }}>حفظ</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
       </div>
     </div>
@@ -925,6 +988,10 @@ function TeacherForm({teacher,onCancel,onSave}){
     <div>
       <Field label="اسم المدرس"><input value={f.name} onChange={e=>set('name',e.target.value)} /></Field>
       <Field label="المادة"><input value={f.subject} onChange={e=>set('subject',e.target.value)} /></Field>
+      <div className="field" style={{display:'flex',alignItems:'center',gap:8}}>
+        <input type="checkbox" id="isOwner" checked={!!f.isOwner} onChange={e=>set('isOwner',e.target.checked)} style={{width:'auto'}} />
+        <label htmlFor="isOwner" style={{margin:0,cursor:'pointer'}}>صاحب الأكاديمية (خارج نظام نسبة المدرسين — حساباته منفصلة)</label>
+      </div>
       <div className="modal-actions">
         <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المدرس');return;} onSave(f); }}>حفظ</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
@@ -1137,7 +1204,7 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
       const willBePaid = !existing.paid;
       persistPayments(payments.map(p=>p.id===existing.id ? {...p, paid: willBePaid, paidDate: willBePaid? todayISO() : null, receiptNo: willBePaid ? (p.receiptNo||nextReceiptNo()) : p.receiptNo} : p));
     }else{
-      persistPayments([...payments, {id:uid(), studentId:student.id, month, amount: g?g.fee:0, paid:true, paidDate:todayISO(), receiptNo:nextReceiptNo()}]);
+      persistPayments([...payments, {id:uid(), studentId:student.id, month, amount: studentFee(student,g), paid:true, paidDate:todayISO(), receiptNo:nextReceiptNo()}]);
     }
   };
 
@@ -1162,7 +1229,7 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
   });
 
   const totalCollected = list.reduce((sum,s)=>{ const r=recordFor(s.id); return sum + (r&&r.paid?Number(r.amount)||0:0); },0);
-  const totalExpected = list.reduce((sum,s)=>{ const g=groupById(s.groupId); return sum + (g?Number(g.fee)||0:0); },0);
+  const totalExpected = list.reduce((sum,s)=>{ const g=groupById(s.groupId); return sum + studentFee(s,g); },0);
 
   return (
     <div>
@@ -1198,7 +1265,7 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
                   <tr key={s.id}>
                     <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
                     <td>{g?g.name:'—'}</td>
-                    <td>{g?fmtMoney(g.fee):'—'}</td>
+                    <td>{fmtMoney(studentFee(s,g))}</td>
                     <td>{paid?<span className="badge badge-green">تم السداد</span>:<span className="badge badge-rose">متأخر</span>}</td>
                     <td className="small muted">{paid && r.paidDate ? r.paidDate : '—'}</td>
                     <td>
@@ -1347,19 +1414,21 @@ function PrivateLessonForm({pkg,teachers,onCancel,onSave}){
   );
 }
 
-function AccountingTab({teachers,groups,students,attendance,payments,expenses,persistExpenses,groupById,currentMonth}){
+function AccountingTab({teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth}){
   const [view,setView] = useState('expenses'); // expenses | shares | daily
   const [month,setMonth] = useState(currentMonth);
   const [day,setDay] = useState(todayISO());
   const [creating,setCreating] = useState(null);
 
-  const EXPENSE_CATEGORIES = ['إيجار','فواتير (كهرباء/مياه/إنترنت)','رواتب','صيانة وتجهيزات','دعاية وتسويق','أخرى'];
+  const EXPENSE_CATEGORIES = ['إيجار','فواتير (كهرباء/مياه/إنترنت)','رواتب','صيانة وتجهيزات','دعاية وتسويق','مذكرات ومواد تعليمية','أخرى'];
 
   const monthExpenses = expenses.filter(e=>e.date.startsWith(month));
   const totalExpenses = monthExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
+  const sharedExpenses = monthExpenses.filter(e=>!e.owner || e.owner==='academy');
+  const totalSharedExpenses = sharedExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
   const monthRevenue = payments.filter(p=>p.month===month && p.paid).reduce((s,p)=>s+(Number(p.amount)||0),0);
 
-  const teacherShares = teachers.map(t=>{
+  const groupRevenue = (t) => {
     const myGroups = groups.filter(g=>g.teacherId===t.id);
     let revenue = 0;
     myGroups.forEach(g=>{
@@ -1368,12 +1437,33 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
         if(p) revenue += Number(p.amount)||0;
       });
     });
-    const pct = myGroups[0]?.commissionPercent ?? 50;
     const avgPct = myGroups.length ? myGroups.reduce((s,g)=>s+(Number(g.commissionPercent)??50),0)/myGroups.length : 50;
-    return {teacher:t, revenue, share: Math.round(revenue*avgPct/100), pct:Math.round(avgPct)};
+    return {revenue, avgPct: Math.round(avgPct), groupCount: myGroups.length};
+  };
+
+  const commissionTeachers = teachers.filter(t=>!t.isOwner);
+  const owner = teachers.find(t=>t.isOwner);
+
+  const teacherShares = commissionTeachers.map(t=>{
+    const {revenue, avgPct} = groupRevenue(t);
+    const share = Math.round(revenue*avgPct/100);
+    return {teacher:t, revenue, share, pct:avgPct, academyCut: revenue-share};
   });
   const totalShares = teacherShares.reduce((s,t)=>s+t.share,0);
-  const netProfit = monthRevenue - totalExpenses - totalShares;
+  const academyCutFromTeachers = teacherShares.reduce((s,t)=>s+t.academyCut,0);
+
+  let ownerBlock = null;
+  if(owner){
+    const {revenue:ownerGroupRevenue} = groupRevenue(owner);
+    const ownerPrivateRevenue = privateLessons
+      .filter(p=>p.teacherId===owner.id && p.purchaseDate && p.purchaseDate.startsWith(month))
+      .reduce((s,p)=>s+(Number(p.pricePerPackage)||0),0);
+    const ownerExpenses = monthExpenses.filter(e=>e.owner===owner.id).reduce((s,e)=>s+(Number(e.amount)||0),0);
+    const ownerNet = ownerGroupRevenue + ownerPrivateRevenue - ownerExpenses;
+    ownerBlock = {teacher:owner, ownerGroupRevenue, ownerPrivateRevenue, ownerExpenses, ownerNet};
+  }
+
+  const academyNetProfit = academyCutFromTeachers + (ownerBlock?ownerBlock.ownerNet:0) - totalSharedExpenses;
 
   const saveExpense = (data) => {
     if(data.id) persistExpenses(expenses.map(e=>e.id===data.id?data:e));
@@ -1388,6 +1478,8 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
   dayAttendance.forEach(rec=> Object.values(rec.records||{}).forEach(v=>{ if(v==='present') dayPresent++; else dayAbsent++; }));
   const dayPayments = payments.filter(p=>p.paid && p.paidDate===day);
   const dayCollected = dayPayments.reduce((s,p)=>s+(Number(p.amount)||0),0);
+
+  const ownerLabel = (e) => e.owner==='academy' || !e.owner ? 'الأكاديمية (عام)' : (teachers.find(t=>t.id===e.owner)?.name || 'الأكاديمية (عام)');
 
   return (
     <div>
@@ -1405,17 +1497,19 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
         <div>
           <div className="toolbar">
             <input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} />
-            <button className="btn btn-primary" style={{marginRight:'auto'}} onClick={()=>setCreating({id:null,date:todayISO(),category:EXPENSE_CATEGORIES[0],description:'',amount:''})}>+ مصروف جديد</button>
+            <button className="btn btn-primary" style={{marginRight:'auto'}} onClick={()=>setCreating({id:null,date:todayISO(),category:EXPENSE_CATEGORIES[0],description:'',amount:'',owner:'academy'})}>+ مصروف جديد</button>
           </div>
           <div className="card">
             <div className="section-title">مصروفات {monthLabel(month)} — إجمالي {fmtMoney(totalExpenses)}</div>
             {monthExpenses.length===0 ? <Empty icon="⎘" text="لا توجد مصروفات مسجلة هذا الشهر" /> : (
               <table>
-                <thead><tr><th>التاريخ</th><th>البند</th><th>الوصف</th><th>المبلغ</th><th></th></tr></thead>
+                <thead><tr><th>التاريخ</th><th>البند</th><th>الوصف</th><th>خاص بـ</th><th>المبلغ</th><th></th></tr></thead>
                 <tbody>
                   {monthExpenses.sort((a,b)=>b.date.localeCompare(a.date)).map(e=>(
                     <tr key={e.id}>
-                      <td>{e.date}</td><td>{e.category}</td><td className="small muted">{e.description||'—'}</td><td>{fmtMoney(e.amount)}</td>
+                      <td>{e.date}</td><td>{e.category}</td><td className="small muted">{e.description||'—'}</td>
+                      <td><span className="badge badge-gray">{ownerLabel(e)}</span></td>
+                      <td>{fmtMoney(e.amount)}</td>
                       <td><button className="btn btn-danger btn-sm" onClick={()=>removeExpense(e.id)}>حذف</button></td>
                     </tr>
                   ))}
@@ -1431,21 +1525,45 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
           <div className="toolbar"><input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} /></div>
           <div className="grid grid-4" style={{marginBottom:18}}>
             <div className="card"><div className="stat-label">الإيرادات المحصّلة</div><div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(monthRevenue)}</div></div>
-            <div className="card"><div className="stat-label">مصروفات تشغيلية</div><div className="stat-value" style={{color:'var(--rose)'}}>{fmtMoney(totalExpenses)}</div></div>
-            <div className="card"><div className="stat-label">نسب المدرسين</div><div className="stat-value" style={{color:'var(--amber)'}}>{fmtMoney(totalShares)}</div></div>
-            <div className="card"><div className="stat-label">صافي الربح</div><div className="stat-value" style={{color:netProfit>=0?'var(--green)':'var(--rose)'}}>{fmtMoney(netProfit)}</div></div>
+            <div className="card"><div className="stat-label">مصروفات مشتركة (عامة)</div><div className="stat-value" style={{color:'var(--rose)'}}>{fmtMoney(totalSharedExpenses)}</div></div>
+            <div className="card"><div className="stat-label">نصيب المدرسين (نسبة)</div><div className="stat-value" style={{color:'var(--amber)'}}>{fmtMoney(totalShares)}</div></div>
+            <div className="card"><div className="stat-label">صافي ربح الأكاديمية</div><div className="stat-value" style={{color:academyNetProfit>=0?'var(--green)':'var(--rose)'}}>{fmtMoney(academyNetProfit)}</div></div>
           </div>
-          <div className="card">
-            <div className="section-title">نسب المدرسين — {monthLabel(month)}</div>
+
+          <div className="card" style={{marginBottom:18}}>
+            <div className="section-title">مدرسين نظام النسبة — {monthLabel(month)}</div>
             <table>
-              <thead><tr><th>المدرس</th><th>إيرادات مجموعاته</th><th>نسبته</th><th>نصيبه</th></tr></thead>
+              <thead><tr><th>المدرس</th><th>إيرادات مجموعاته</th><th>نسبته</th><th>نصيبه (يُصرف له)</th><th>نصيب الأكاديمية</th></tr></thead>
               <tbody>
                 {teacherShares.map(t=>(
-                  <tr key={t.teacher.id}><td>{t.teacher.name}</td><td>{fmtMoney(t.revenue)}</td><td>{t.pct}%</td><td style={{fontWeight:800}}>{fmtMoney(t.share)}</td></tr>
+                  <tr key={t.teacher.id}>
+                    <td>{t.teacher.name}</td><td>{fmtMoney(t.revenue)}</td><td>{t.pct}%</td>
+                    <td style={{fontWeight:800}}>{fmtMoney(t.share)}</td>
+                    <td className="small muted">{fmtMoney(t.academyCut)}</td>
+                  </tr>
                 ))}
+                {teacherShares.length===0 && <tr><td colSpan="5" className="muted small" style={{textAlign:'center',padding:14}}>لا يوجد مدرسين على نظام النسبة</td></tr>}
               </tbody>
             </table>
           </div>
+
+          {ownerBlock && (
+            <div className="card">
+              <div className="section-title">حساب {ownerBlock.teacher.name} (صاحب الأكاديمية — منفصل عن نظام النسبة)</div>
+              <table>
+                <thead><tr><th>إيرادات مجموعاته</th><th>إيرادات الدروس الخصوصية</th><th>مصروفاته الخاصة (مذكرات..)</th><th>صافي حسابه</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td>{fmtMoney(ownerBlock.ownerGroupRevenue)}</td>
+                    <td>{fmtMoney(ownerBlock.ownerPrivateRevenue)}</td>
+                    <td className="small muted">−{fmtMoney(ownerBlock.ownerExpenses)}</td>
+                    <td style={{fontWeight:900}}>{fmtMoney(ownerBlock.ownerNet)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p className="small muted" style={{marginTop:10}}>صافي حسابه بيتجمع مع نصيب الأكاديمية من باقي المدرسين، وبعدين تتطرح منه المصروفات العامة المشتركة (الإيجار والفواتير) للوصول لصافي ربح الأكاديمية الكلي فوق.</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -1476,14 +1594,14 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
 
       {creating && (
         <Modal title="مصروف جديد" onClose={()=>setCreating(null)}>
-          <ExpenseForm expense={creating} categories={EXPENSE_CATEGORIES} onCancel={()=>setCreating(null)} onSave={saveExpense} />
+          <ExpenseForm expense={creating} categories={EXPENSE_CATEGORIES} teachers={teachers} onCancel={()=>setCreating(null)} onSave={saveExpense} />
         </Modal>
       )}
     </div>
   );
 }
 
-function ExpenseForm({expense,categories,onCancel,onSave}){
+function ExpenseForm({expense,categories,teachers,onCancel,onSave}){
   const [f,setF] = useState(expense);
   const set=(k,v)=>setF({...f,[k]:v});
   return (
@@ -1498,6 +1616,12 @@ function ExpenseForm({expense,categories,onCancel,onSave}){
       </div>
       <Field label="الوصف (اختياري)"><input value={f.description} onChange={e=>set('description',e.target.value)} /></Field>
       <Field label="المبلغ (ج.م)"><input type="number" value={f.amount} onChange={e=>set('amount',e.target.value)} /></Field>
+      <Field label="هذا المصروف خاص بـ">
+        <select value={f.owner||'academy'} onChange={e=>set('owner',e.target.value)}>
+          <option value="academy">الأكاديمية (مصروف عام مشترك)</option>
+          {teachers.map(t=><option key={t.id} value={t.id}>{t.name} (خصم من حسابه الشخصي)</option>)}
+        </select>
+      </Field>
       <div className="modal-actions">
         <button className="btn btn-primary" onClick={()=>{ if(!f.amount){alert('أدخل المبلغ');return;} onSave({...f,amount:Number(f.amount)}); }}>حفظ</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
@@ -1865,6 +1989,32 @@ function StudentCodesTab({students,groups,groupById}){
   );
 }
 
+function LevelDiagram({rate, examsAvg}){
+  const bars = [
+    {label:'نسبة الحضور', value: rate===null?0:rate, hasData: rate!==null, color:'#1a8a4a'},
+    {label:'متوسط الدرجات', value: examsAvg===null?0:examsAvg, hasData: examsAvg!==null, color:'#FF0000'},
+  ];
+  const W = 460, barH = 26, gap = 22, leftPad = 130, topPad = 10;
+  const chartW = W - leftPad - 20;
+  const H = topPad*2 + bars.length*(barH+gap);
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} xmlns="http://www.w3.org/2000/svg" style={{maxWidth:W}}>
+      {bars.map((b,i)=>{
+        const y = topPad + i*(barH+gap);
+        const w = b.hasData ? (b.value/100)*chartW : 0;
+        return (
+          <g key={i}>
+            <text x={leftPad-10} y={y+barH*0.7} textAnchor="end" fontSize="13" fontFamily="Tajawal, sans-serif" fill="#221e1c" fontWeight="700">{b.label}</text>
+            <rect x={leftPad} y={y} width={chartW} height={barH} rx="8" fill="#f0ebe4" />
+            <rect x={leftPad} y={y} width={w} height={barH} rx="8" fill={b.color} />
+            <text x={leftPad+chartW+8} y={y+barH*0.7} fontSize="13" fontFamily="Tajawal, sans-serif" fill="#221e1c" fontWeight="900">{b.hasData? b.value+'%' : '—'}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 function ReportsTab({students,groups,attendance,grades,payments,groupById}){
   const [studentId,setStudentId] = useState(students[0]?students[0].id:'');
   const [month,setMonth] = useState(monthKey());
@@ -1937,12 +2087,19 @@ function ReportsTab({students,groups,attendance,grades,payments,groupById}){
             <div><div className="small muted">المرحلة الدراسية</div><div style={{fontWeight:800}}>{student.stage}</div></div>
             <div><div className="small muted">المجموعة</div><div style={{fontWeight:800}}>{group?group.name:'—'}</div></div>
             <div><div className="small muted">هاتف ولي الأمر</div><div style={{fontWeight:800}}>{student.parentPhone||'—'}</div></div>
+            <div><div className="small muted">المدرسة</div><div style={{fontWeight:800}}>{student.schoolName||'—'}</div></div>
+            <div><div className="small muted">نوع التعليم</div><div style={{fontWeight:800}}>{student.educationType||'—'}</div></div>
           </div>
 
           <div className="grid grid-3" style={{marginBottom:16}}>
             <div className="card"><div className="stat-label">نسبة الحضور</div><div className="stat-value">{stats.rate===null?'—':stats.rate+'%'}</div></div>
             <div className="card"><div className="stat-label">متوسط الدرجات</div><div className="stat-value">{stats.examsAvg===null?'—':stats.examsAvg+'%'}</div><div className="small muted">{stats.monthExams.length} اختبار</div></div>
-            <div className="card"><div className="stat-label">حالة السداد</div><div className="stat-value" style={{color:stats.paid?'var(--green)':'var(--rose)'}}>{stats.paid?'تم السداد':'متأخر'}</div><div className="small muted">{group?fmtMoney(group.fee):''}</div></div>
+            <div className="card"><div className="stat-label">حالة السداد</div><div className="stat-value" style={{color:stats.paid?'var(--green)':'var(--rose)'}}>{stats.paid?'تم السداد':'متأخر'}</div><div className="small muted">{fmtMoney(studentFee(student,group))}</div></div>
+          </div>
+
+          <div className="section-title">مستوى الطالب بصريًا</div>
+          <div className="card" style={{marginBottom:16, display:'flex', justifyContent:'center'}}>
+            <LevelDiagram rate={stats.rate} examsAvg={stats.examsAvg} />
           </div>
 
           <div className="section-title">سجل الغياب</div>
