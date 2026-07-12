@@ -23,7 +23,7 @@ body{
 .app{display:flex; min-height:100vh;}
 .sidebar{
   width:230px; background:var(--charcoal); color:#fff; display:flex; flex-direction:column;
-  flex-shrink:0; position:sticky; top:0; height:100vh; overflow-y:auto;
+  flex-shrink:0; position:sticky; top:70px; height:calc(100vh - 70px); overflow-y:auto;
 }
 .brand{display:flex; align-items:center; gap:10px; padding:22px 18px 16px; border-bottom:1px solid #33291f;}
 .brand-sub{font-size:11px; color:#c9beb3; margin-top:2px; letter-spacing:.3px;}
@@ -113,7 +113,7 @@ label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; marg
 .receipt-line{display:flex; justify-content:space-between; padding:4px 0; font-size:12.5px;}
 .receipt-dashed{border-top:1.5px dashed #ccc; margin:8px 0;}
 @media print{
-  .sidebar,.topbar,.toolbar,.no-print{display:none !important;}
+  .sidebar,.topbar,.toolbar,.no-print,.app-header{display:none !important;}
   .main{padding:0;}
   .print-only{display:block;}
   body{background:#fff;}
@@ -158,6 +158,38 @@ label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; marg
 .sch-slot-btn.taken{border-color:var(--border);background:#f4efe8;color:var(--muted);cursor:not-allowed;text-decoration:line-through;}
 .sch-widget-row{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;}
 .sch-widget-row:last-child{border-bottom:none;}
+.sch-owner-tag{margin-inline-start:auto;background:var(--charcoal);color:#fff;font-size:10px;font-weight:800;padding:2px 9px;border-radius:999px;white-space:nowrap;}
+
+/* ---- Global app header (clock + center-group countdown, visible to admin & secretary) ---- */
+.app-header{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  background:var(--charcoal);color:#fff;padding:12px 26px;height:70px;box-sizing:border-box;
+  position:sticky;top:0;z-index:40;box-shadow:0 2px 10px rgba(0,0,0,.15);
+}
+.app-header-side{flex:1;display:flex;min-width:0;}
+.app-header-side:last-child{justify-content:flex-end;}
+.app-header-clock{text-align:center;flex-shrink:0;}
+.app-header-clock .ahc-time-big{font-family:'Big Shoulders Display',sans-serif;font-weight:900;font-size:30px;letter-spacing:1px;line-height:1;}
+.app-header-clock .ahc-date{font-size:11.5px;color:#c9beb3;margin-top:3px;font-weight:700;}
+.app-header-countdown{background:rgba(255,255,255,.08);border-radius:10px;padding:7px 14px;display:flex;flex-direction:column;gap:2px;max-width:100%;}
+.app-header-countdown.muted{color:#9b8f85;font-size:12px;font-weight:700;background:transparent;padding:7px 0;}
+.app-header-countdown .ahc-label{font-size:11px;color:#c9beb3;font-weight:700;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.app-header-countdown .ahc-time{font-family:'Big Shoulders Display',sans-serif;font-weight:900;font-size:19px;color:var(--red);}
+
+/* ---- Local header inside "جدولي" tab (own clock color + countdown across all types) ---- */
+.sch-header{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  background:#fff;border:1.5px solid var(--border);border-radius:14px;padding:14px 22px;margin-bottom:16px;
+}
+.sch-header-side{flex:1;display:flex;min-width:0;}
+.sch-header-side:last-child{justify-content:flex-end;}
+.sch-header-clock{text-align:center;flex-shrink:0;}
+.sch-header-clock .shc-time-big{font-family:'Big Shoulders Display',sans-serif;font-weight:900;font-size:28px;color:var(--red);letter-spacing:1px;line-height:1;}
+.sch-header-clock .shc-date{font-size:11.5px;color:var(--muted);margin-top:3px;font-weight:700;}
+.sch-header-countdown{background:var(--rose-bg);border-radius:10px;padding:7px 14px;display:flex;flex-direction:column;gap:2px;max-width:100%;}
+.sch-header-countdown.muted{color:var(--muted);font-size:12px;font-weight:700;background:transparent;padding:7px 0;}
+.sch-header-countdown .shc-label{font-size:11px;color:var(--muted);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sch-header-countdown .shc-time{font-family:'Big Shoulders Display',sans-serif;font-weight:900;font-size:19px;color:var(--rose);}
 </style>
 </head>
 <body>
@@ -182,6 +214,7 @@ label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; marg
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-app-compat.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-auth-compat.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.15.0/firebase-firestore-compat.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/dist/face-api.min.js"></script>
 <script type="text/plain" id="app-source">
 const {useState,useEffect,useMemo,useCallback} = React;
@@ -290,29 +323,67 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
+// ---- Google Calendar sync config ----
+// TODO: replace with your own OAuth Client ID from Google Cloud Console
+// (APIs & Services -> Credentials -> Create Credentials -> OAuth client ID -> Web application).
+// Also enable the "Google Calendar API" for the project, and add this site's URL under
+// "Authorized JavaScript origins".
+const GOOGLE_CLIENT_ID = "REPLACE_WITH_YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
+const SCHEDULE_OWNER_NAME_EN = "Mr. Mohamed Samy";
+
 const COLLECTIONS = ['teachers','groups','students','attendance','grades','payments','expenses','privateLessons'];
 
 // Diffs newArray against the last-known state for a collection and writes only
 // the changed/added/removed documents to Firestore, so history-heavy
 // collections (attendance, payments) do not get fully rewritten on every save.
-function makePersist(name, stateRef, setter){
+// Logs non-admin (secretary) writes to activityLog for the admin's daily security report,
+// and attaches a full snapshot of the affected collection right after the change (instant backup).
+async function logActivity(user, role, collectionName, changes){
+  if(!user || role==='admin') return; // only audit secretary actions per spec
+  const parts = [];
+  if(changes.created.length) parts.push(`إضافة ${changes.created.length}`);
+  if(changes.updated.length) parts.push(`تعديل ${changes.updated.length}`);
+  if(changes.deleted.length) parts.push(`حذف ${changes.deleted.length}`);
+  if(parts.length===0) return;
+  try{
+    const snap = JSON.stringify(changes.newArray);
+    await db.collection('activityLog').add({
+      actorEmail: user.email,
+      actorRole: role,
+      collection: collectionName,
+      created: changes.created,
+      updated: changes.updated,
+      deleted: changes.deleted,
+      summary: parts.join('، ') + ' في ' + collectionName,
+      snapshotAfter: snap.length < 800000 ? snap : null, // instant backup, skipped if too large for one doc
+      at: firebase.firestore.FieldValue.serverTimestamp(),
+      dateKey: todayISO(),
+    });
+  }catch(err){ console.error('activity log failed', err); }
+}
+
+function makePersist(name, stateRef, setter, actorRef){
   return async (newArray) => {
     const oldArray = stateRef.current || [];
     setter(newArray); // optimistic local update; onSnapshot will reconcile
     const batch = db.batch();
     const newIds = new Set();
+    const created=[], updated=[];
     newArray.forEach(item=>{
       newIds.add(item.id);
       const old = oldArray.find(o=>o.id===item.id);
-      if(!old || JSON.stringify(old)!==JSON.stringify(item)){
-        const {id, ...rest} = item;
-        batch.set(db.collection(name).doc(id), rest);
-      }
+      if(!old){ created.push(item.id); const {id, ...rest} = item; batch.set(db.collection(name).doc(id), rest); }
+      else if(JSON.stringify(old)!==JSON.stringify(item)){ updated.push(item.id); const {id, ...rest} = item; batch.set(db.collection(name).doc(id), rest); }
     });
+    const deleted=[];
     oldArray.forEach(item=>{
-      if(!newIds.has(item.id)) batch.delete(db.collection(name).doc(item.id));
+      if(!newIds.has(item.id)){ deleted.push(item.id); batch.delete(db.collection(name).doc(item.id)); }
     });
-    try{ await batch.commit(); }
+    try{
+      await batch.commit();
+      const actor = actorRef ? actorRef.current : null;
+      if(actor) logActivity(actor.user, actor.role, name, {created,updated,deleted,newArray});
+    }
     catch(err){ console.error(err); alert('فشل الحفظ: '+(err.message||'')+'\n(تأكد إن عندك صلاحية لهذا الإجراء)'); }
   };
 }
@@ -342,6 +413,41 @@ function Empty({icon,text}){
   return <div className="empty"><div className="empty-icon">{icon}</div>{text}</div>;
 }
 
+function GlobalHeader({isAdmin}){
+  const [now,setNow] = useState(new Date());
+  useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t); },[]);
+  const [centerEvents,setCenterEvents] = useState([]);
+  useEffect(()=>{
+    const unsub = db.collection('scheduleEvents').where('type','==','center').onSnapshot(snap=>{
+      setCenterEvents(snap.docs.map(d=>({id:d.id,...d.data()})));
+    }, err=>console.error(err));
+    return unsub;
+  },[]);
+
+  const timeStr = now.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+  const dateStr = now.toLocaleDateString('ar-EG',{day:'numeric',month:'long',year:'numeric'});
+  const dayStr = SCHED_DAY_NAMES[now.getDay()];
+  const next = schedNextOccurrence(centerEvents, now);
+
+  return (
+    <div className="app-header">
+      <div className="app-header-side">
+        {next ? (
+          <div className="app-header-countdown">
+            <span className="ahc-label">باقي على {next.name} <span className="sch-owner-tag">{SCHEDULE_OWNER_NAME_EN}</span></span>
+            <span className="ahc-time">{schedFormatCountdown(next.msLeft)}</span>
+          </div>
+        ) : <div className="app-header-countdown muted">مفيش مجموعات سنتر قريبة</div>}
+      </div>
+      <div className="app-header-clock">
+        <div className="ahc-time-big">{timeStr}</div>
+        <div className="ahc-date">{dayStr} · {dateStr}</div>
+      </div>
+      <div className="app-header-side"></div>
+    </div>
+  );
+}
+
 function App(){
   const [authLoading,setAuthLoading] = useState(true);
   const [user,setUser] = useState(null);
@@ -367,6 +473,8 @@ function App(){
   const paymentsRef = React.useRef([]); paymentsRef.current = payments;
   const expensesRef = React.useRef([]); expensesRef.current = expenses;
   const privateLessonsRef = React.useRef([]); privateLessonsRef.current = privateLessons;
+  const actorRef = React.useRef({user:null, role:null});
+  useEffect(()=>{ actorRef.current = {user, role}; },[user,role]);
 
   // Auth: watch sign-in state and load this user role from /users/{uid}
   useEffect(()=>{
@@ -432,14 +540,14 @@ function App(){
     }
   },[role,dataLoaded,teachers,groups]);
 
-  const persistTeachers = React.useCallback(makePersist('teachers', teachersRef, setTeachers),[]);
-  const persistGroups = React.useCallback(makePersist('groups', groupsRef, setGroups),[]);
-  const persistStudents = React.useCallback(makePersist('students', studentsRef, setStudents),[]);
-  const persistAttendance = React.useCallback(makePersist('attendance', attendanceRef, setAttendance),[]);
-  const persistGrades = React.useCallback(makePersist('grades', gradesRef, setGrades),[]);
-  const persistPayments = React.useCallback(makePersist('payments', paymentsRef, setPayments),[]);
-  const persistExpenses = React.useCallback(makePersist('expenses', expensesRef, setExpenses),[]);
-  const persistPrivateLessons = React.useCallback(makePersist('privateLessons', privateLessonsRef, setPrivateLessons),[]);
+  const persistTeachers = React.useCallback(makePersist('teachers', teachersRef, setTeachers, actorRef),[]);
+  const persistGroups = React.useCallback(makePersist('groups', groupsRef, setGroups, actorRef),[]);
+  const persistStudents = React.useCallback(makePersist('students', studentsRef, setStudents, actorRef),[]);
+  const persistAttendance = React.useCallback(makePersist('attendance', attendanceRef, setAttendance, actorRef),[]);
+  const persistGrades = React.useCallback(makePersist('grades', gradesRef, setGrades, actorRef),[]);
+  const persistPayments = React.useCallback(makePersist('payments', paymentsRef, setPayments, actorRef),[]);
+  const persistExpenses = React.useCallback(makePersist('expenses', expensesRef, setExpenses, actorRef),[]);
+  const persistPrivateLessons = React.useCallback(makePersist('privateLessons', privateLessonsRef, setPrivateLessons, actorRef),[]);
 
   const groupById = useCallback((id)=> groups.find(g=>g.id===id), [groups]);
   const teacherById = useCallback((id)=> teachers.find(t=>t.id===id), [teachers]);
@@ -560,7 +668,9 @@ function App(){
 
   return (
     <React.Fragment>
-    <div className={"app"+(receiptData?" no-print":"")}>
+    <div className={receiptData?"no-print":""}>
+      <GlobalHeader isAdmin={isAdmin} />
+      <div className="app">
       <div className="sidebar no-print">
         <div className="brand">
           {LOGO(74)}
@@ -592,7 +702,7 @@ function App(){
       </div>
 
       <div className="main">
-        {tab==='dashboard' && <Dashboard {...{students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab}} />}
+        {tab==='dashboard' && <Dashboard {...{students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab,isAdmin}} />}
         {tab==='students' && <StudentsTab {...{students,groups,persistStudents,payments,currentMonth,groupById,attendance,isAdmin}} />}
         {tab==='groups' && <GroupsTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin}} />}
         {tab==='attendance' && <AttendanceTab {...{groups,students,attendance,persistAttendance,studentsInGroup}} />}
@@ -605,6 +715,7 @@ function App(){
         {tab==='schedule' && isAdmin && <ScheduleTab />}
         {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth}} />}
         {tab==='reports' && <ReportsTab {...{students,groups,attendance,grades,payments,groupById}} />}
+      </div>
       </div>
     </div>
     {receiptData && <ReceiptOverlay data={receiptData} onClose={()=>setReceiptData(null)} />}
@@ -643,7 +754,43 @@ function LoginScreen(){
   );
 }
 
-function Dashboard({students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab}){
+// Admin-only daily security report: every create/edit/delete the secretary makes anywhere
+// in the system today, newest first. Backed by the activityLog collection (see makePersist).
+function SecretaryActivityCard(){
+  const [logs,setLogs] = useState([]);
+  useEffect(()=>{
+    const today = todayISO();
+    const unsub = db.collection('activityLog').where('dateKey','==',today).onSnapshot(snap=>{
+      const list = snap.docs.map(d=>({id:d.id,...d.data()}));
+      list.sort((a,b)=> (b.at && b.at.toMillis ? b.at.toMillis() : 0) - (a.at && a.at.toMillis ? a.at.toMillis() : 0));
+      setLogs(list);
+    }, err=>console.error(err));
+    return unsub;
+  },[]);
+
+  if(logs.length===0) return null;
+
+  return (
+    <div className="card" style={{marginBottom:18, borderColor:'var(--charcoal)'}}>
+      <div className="section-title">🛡 نشاط السكرتيرة اليوم ({logs.length})</div>
+      <table>
+        <thead><tr><th>الوقت</th><th>الحساب</th><th>القسم</th><th>التفاصيل</th></tr></thead>
+        <tbody>
+          {logs.map(l=>(
+            <tr key={l.id}>
+              <td className="small muted">{l.at && l.at.toDate ? l.at.toDate().toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'}) : '—'}</td>
+              <td className="small">{l.actorEmail}</td>
+              <td className="small">{l.collection}</td>
+              <td className="small">{l.summary}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Dashboard({students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab,isAdmin}){
   const frequentAbsentees = useMemo(()=>{
     return students
       .filter(s=>s.groupId)
@@ -660,6 +807,8 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
           <div className="date">{new Date().toLocaleDateString('ar-EG',{weekday:'long',year:'numeric',month:'long',day:'numeric'})} — {monthLabel(currentMonth)}</div>
         </div>
       </div>
+
+      {isAdmin && <SecretaryActivityCard />}
 
       <div className="grid grid-4" style={{marginBottom:18}}>
         <div className="card">
@@ -1239,11 +1388,12 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
   const togglePaid = (student) => {
     const g = groupById(student.groupId);
     const existing = recordFor(student.id);
+    const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
     if(existing){
       const willBePaid = !existing.paid;
-      persistPayments(payments.map(p=>p.id===existing.id ? {...p, paid: willBePaid, paidDate: willBePaid? todayISO() : null, receiptNo: willBePaid ? (p.receiptNo||nextReceiptNo()) : p.receiptNo} : p));
+      persistPayments(payments.map(p=>p.id===existing.id ? {...p, paid: willBePaid, paidDate: willBePaid? todayISO() : null, paidAt: willBePaid ? new Date().toISOString() : null, paidBy: willBePaid ? recipientLabel : null, receiptNo: willBePaid ? (p.receiptNo||nextReceiptNo()) : p.receiptNo} : p));
     }else{
-      persistPayments([...payments, {id:uid(), studentId:student.id, month, amount: studentFee(student,g), paid:true, paidDate:todayISO(), receiptNo:nextReceiptNo()}]);
+      persistPayments([...payments, {id:uid(), studentId:student.id, month, amount: studentFee(student,g), paid:true, paidDate:todayISO(), paidAt:new Date().toISOString(), paidBy:recipientLabel, receiptNo:nextReceiptNo()}]);
     }
   };
 
@@ -1251,6 +1401,7 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
     const g = groupById(student.groupId);
     const r = recordFor(student.id);
     if(!r || !r.paid) return;
+    const paidDateObj = r.paidAt ? new Date(r.paidAt) : new Date(r.paidDate || todayISO());
     setReceiptData({
       receiptNo: r.receiptNo || '—',
       studentName: student.name,
@@ -1258,6 +1409,9 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
       month,
       amount: r.amount,
       date: r.paidDate || todayISO(),
+      dayName: SCHED_DAY_NAMES[paidDateObj.getDay()],
+      time: paidDateObj.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit',hour12:true}),
+      recipient: r.paidBy || (isAdmin ? 'مستر محمد سامي' : 'السكرتيرة'),
     });
   };
 
@@ -1333,13 +1487,15 @@ function ReceiptOverlay({data,onClose}){
           <div style={{textAlign:'center',fontWeight:900,fontSize:15}}>SamySchool</div>
           <div style={{textAlign:'center',fontSize:11,color:'#666',marginBottom:10}}>إيصال سداد مصروفات</div>
           <div className="receipt-line"><span>رقم الإيصال</span><span>#{data.receiptNo}</span></div>
-          <div className="receipt-line"><span>التاريخ</span><span>{data.date}</span></div>
+          <div className="receipt-line"><span>التاريخ</span><span>{data.dayName ? `${data.dayName}، ` : ''}{data.date}</span></div>
+          {data.time && <div className="receipt-line"><span>الوقت</span><span>{data.time}</span></div>}
           <div className="receipt-line"><span>الطالب</span><span>{data.studentName}</span></div>
           <div className="receipt-line"><span>المجموعة</span><span>{data.groupName}</span></div>
           <div className="receipt-line"><span>الشهر</span><span>{monthLabel(data.month)}</span></div>
           <div className="receipt-dashed"></div>
           <div className="receipt-line" style={{fontWeight:900,fontSize:14}}><span>المبلغ المدفوع</span><span>{fmtMoney(data.amount)}</span></div>
           <div className="receipt-dashed"></div>
+          {data.recipient && <div className="receipt-line small muted"><span>استلم بواسطة</span><span>{data.recipient}</span></div>}
           <div style={{textAlign:'center',fontSize:11,color:'#666',marginTop:8}}>شكرًا لثقتكم في SamySchool</div>
         </div>
         <div className="no-print" style={{display:'flex',gap:10,marginTop:16,justifyContent:'center'}}>
@@ -1607,6 +1763,151 @@ const schedWithConflicts = (occs) => {
   });
   return occs.map(o=>({...o, conflict: flagged.has(o.id+'_'+o.day)}));
 };
+
+// ---- Countdown helpers (used by GlobalHeader and ScheduleTab's local header) ----
+function schedNextOccurrence(events, now){
+  const occs = schedOccurrences(events);
+  if(occs.length===0) return null;
+  const nowDay = now.getDay();
+  const nowMin = now.getHours()*60 + now.getMinutes() + now.getSeconds()/60;
+  let best = null;
+  occs.forEach(o=>{
+    let daysUntil = (o.day - nowDay + 7) % 7;
+    if(daysUntil===0 && o.startMin <= nowMin) daysUntil = 7;
+    const target = new Date(now);
+    target.setDate(target.getDate() + daysUntil);
+    target.setHours(Math.floor(o.startMin/60), o.startMin%60, 0, 0);
+    const msLeft = target - now;
+    if(msLeft >= 0 && (!best || msLeft < best.msLeft)) best = {...o, msLeft, target};
+  });
+  return best;
+}
+function schedFormatCountdown(ms){
+  if(ms<0) ms=0;
+  const totalMin = Math.floor(ms/60000);
+  const days = Math.floor(totalMin/1440);
+  const hours = Math.floor((totalMin%1440)/60);
+  const mins = totalMin%60;
+  if(days>0) return `${days} يوم ${hours} س`;
+  if(hours>0) return `${hours} س ${mins} د`;
+  const secs = Math.floor((ms%60000)/1000);
+  return `${mins} د ${secs} ث`;
+}
+function schedNextDateForDay(day, now=new Date()){
+  const diff = (day - now.getDay() + 7) % 7;
+  const d = new Date(now);
+  d.setDate(d.getDate()+diff);
+  return d;
+}
+function schedIsoLocal(date, hhmm){
+  const [h,m] = hhmm.split(':').map(Number);
+  const y=date.getFullYear(), mo=String(date.getMonth()+1).padStart(2,'0'), da=String(date.getDate()).padStart(2,'0');
+  return `${y}-${mo}-${da}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`;
+}
+
+// ---- Google Calendar one-click sync ----
+// Creates/updates/deletes weekly-recurring events on a dedicated "جدول Samy School" calendar,
+// mirroring exactly what's in scheduleEvents (deleted local events are deleted on Google too).
+const RRULE_DAY_CODES = ['SU','MO','TU','WE','TH','FR','SA'];
+let gcalTokenClient = null;
+let gcalTokenCache = {token:null, expiresAt:0};
+
+function getGoogleAccessToken(){
+  return new Promise((resolve,reject)=>{
+    if(gcalTokenCache.token && Date.now() < gcalTokenCache.expiresAt - 30000){ resolve(gcalTokenCache.token); return; }
+    if(!window.google || !window.google.accounts || !window.google.accounts.oauth2){
+      reject(new Error('مكتبة Google لسه مش محمّلة، جرّب تاني بعد لحظة.')); return;
+    }
+    if(!gcalTokenClient){
+      gcalTokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/calendar.events',
+        callback: () => {},
+      });
+    }
+    gcalTokenClient.callback = (resp) => {
+      if(resp.error){ reject(new Error(resp.error)); return; }
+      gcalTokenCache = {token: resp.access_token, expiresAt: Date.now() + (resp.expires_in*1000)};
+      resolve(resp.access_token);
+    };
+    gcalTokenClient.requestAccessToken({prompt: gcalTokenCache.token ? '' : 'consent'});
+  });
+}
+
+async function ensureSamySchoolCalendar(token){
+  const metaRef = db.collection('meta').doc('googleCalendarSync');
+  const metaSnap = await metaRef.get();
+  const meta = metaSnap.exists ? metaSnap.data() : {};
+  if(meta.calendarId){
+    const check = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${meta.calendarId}`, {headers:{Authorization:'Bearer '+token}});
+    if(check.ok) return meta.calendarId;
+  }
+  const res = await fetch('https://www.googleapis.com/calendar/v3/calendars', {
+    method:'POST',
+    headers:{Authorization:'Bearer '+token, 'Content-Type':'application/json'},
+    body: JSON.stringify({summary:'جدول Samy School', timeZone:'Africa/Cairo'}),
+  });
+  if(!res.ok) throw new Error('تعذّر إنشاء تقويم جديد على Google');
+  const data = await res.json();
+  await metaRef.set({calendarId:data.id}, {merge:true});
+  return data.id;
+}
+
+async function syncScheduleToGoogle(events){
+  const token = await getGoogleAccessToken();
+  const calendarId = await ensureSamySchoolCalendar(token);
+  const metaRef = db.collection('meta').doc('googleCalendarSync');
+  const metaSnap = await metaRef.get();
+  const meta = metaSnap.exists ? metaSnap.data() : {};
+  const map = {...(meta.map||{})};
+
+  let created=0, updated=0, deleted=0;
+  const currentIds = new Set(events.map(e=>e.id));
+
+  for(const ev of events){
+    const days = [...ev.days].sort((a,b)=>a-b);
+    const startDates = days.map(d=>schedNextDateForDay(d)).sort((a,b)=>a-b);
+    const startDate = startDates[0];
+    const byday = days.map(d=>RRULE_DAY_CODES[d]).join(',');
+    const body = {
+      summary: `${schedTypeLabel(ev.type)} — ${ev.name}`,
+      description: ev.area ? `العنوان: ${ev.area}` : (ev.link ? `الرابط: ${ev.link}` : ''),
+      start: {dateTime: schedIsoLocal(startDate, ev.start), timeZone:'Africa/Cairo'},
+      end: {dateTime: schedIsoLocal(startDate, schedMinToTime(schedTimeToMin(ev.start)+ev.duration)), timeZone:'Africa/Cairo'},
+      recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=${byday}`],
+      reminders: {useDefault:false, overrides:[{method:'popup', minutes:15}]},
+    };
+    if(map[ev.id]){
+      const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${map[ev.id]}`, {
+        method:'PATCH', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'}, body:JSON.stringify(body)
+      });
+      if(res.ok) updated++;
+      else if(res.status===404){
+        const res2 = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`, {
+          method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'}, body:JSON.stringify(body)
+        });
+        if(res2.ok){ const d2 = await res2.json(); map[ev.id]=d2.id; created++; }
+      }
+    }else{
+      const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`, {
+        method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'}, body:JSON.stringify(body)
+      });
+      if(res.ok){ const d = await res.json(); map[ev.id]=d.id; created++; }
+    }
+  }
+
+  for(const oldId of Object.keys(map)){
+    if(!currentIds.has(oldId)){
+      const gid = map[oldId];
+      await fetch(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${gid}`, {method:'DELETE', headers:{Authorization:'Bearer '+token}}).catch(()=>{});
+      delete map[oldId];
+      deleted++;
+    }
+  }
+
+  await metaRef.set({calendarId, map}, {merge:true});
+  return {created, updated, deleted};
+}
 const schedSlotsForDay = (day, kind, allEvents) => {
   let open, startMin, lastStart, step=60;
   if(kind==='center'){
@@ -1634,6 +1935,10 @@ function ScheduleTab(){
   const [dailyDay,setDailyDay] = useState(new Date().getDay());
   const [slotTab,setSlotTab] = useState('center');
   const [editing,setEditing] = useState(null);
+  const [now,setNow] = useState(new Date());
+  const [gcalStatus,setGcalStatus] = useState('idle'); // idle|syncing
+
+  useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t); },[]);
 
   useEffect(()=>{
     const unsub = db.collection('scheduleEvents').onSnapshot(snap=>{
@@ -1643,6 +1948,22 @@ function ScheduleTab(){
   },[]);
 
   const allEvents = [...schedSchoolBlocks(), ...events];
+  const nextAny = schedNextOccurrence(events, now);
+  const headerTimeStr = now.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+  const headerDateStr = now.toLocaleDateString('ar-EG',{day:'numeric',month:'long',year:'numeric'});
+  const headerDayStr = SCHED_DAY_NAMES[now.getDay()];
+
+  const doGoogleSync = async () => {
+    setGcalStatus('syncing');
+    try{
+      const result = await syncScheduleToGoogle(events);
+      alert(`تمت المزامنة مع Google Calendar ✅\nأُضيف: ${result.created}\nاتحدّث: ${result.updated}\nاتحذف: ${result.deleted}`);
+    }catch(err){
+      console.error(err);
+      alert('حصل خطأ في المزامنة مع Google Calendar: '+(err.message||''));
+    }
+    setGcalStatus('idle');
+  };
 
   const save = (data) => {
     const payload = {type:data.type, name:data.name, area:data.area||'', link:data.link||'', days:data.days, start:data.start, duration:data.duration};
@@ -1674,10 +1995,27 @@ function ScheduleTab(){
     <div>
       <div className="topbar">
         <div><h1>جدولي الأسبوعي</h1><div className="date">المدرسة، السنتر، الأونلاين، والخصوصي في مكان واحد</div></div>
-        <div style={{display:'flex',gap:10}}>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+          <button className="btn btn-ghost btn-sm" disabled={gcalStatus==='syncing'} onClick={doGoogleSync}>{gcalStatus==='syncing'?'⏳ جاري المزامنة...':'📆 مزامنة مع Google Calendar'}</button>
           <button className="btn btn-ghost btn-sm" onClick={resetAll}>تفريغ الجدول</button>
           <button className="btn btn-primary" onClick={()=>setEditing({id:null,type:'center',name:'',area:'',link:'',days:[],start:'16:00',duration:60})}>+ إضافة موعد</button>
         </div>
+      </div>
+
+      <div className="sch-header">
+        <div className="sch-header-side">
+          {nextAny ? (
+            <div className="sch-header-countdown">
+              <span className="shc-label">باقي على {nextAny.name}</span>
+              <span className="shc-time">{schedFormatCountdown(nextAny.msLeft)}</span>
+            </div>
+          ) : <div className="sch-header-countdown muted">مفيش مواعيد قريبة</div>}
+        </div>
+        <div className="sch-header-clock">
+          <div className="shc-time-big">{headerTimeStr}</div>
+          <div className="shc-date">{headerDayStr} · {headerDateStr}</div>
+        </div>
+        <div className="sch-header-side"></div>
       </div>
 
       <div className="sch-toolbar">
@@ -1903,6 +2241,7 @@ function CenterScheduleWidget(){
           <span className="badge badge-gray">{SCHED_DAY_SHORT[o.day]}</span>
           <span style={{fontWeight:800}}>{schedFmt12(o.start)}</span>
           <span className="muted">{o.name}</span>
+          <span className="sch-owner-tag">{SCHEDULE_OWNER_NAME_EN}</span>
         </div>
       ))}
     </div>
