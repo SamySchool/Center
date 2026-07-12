@@ -122,6 +122,42 @@ label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; marg
 }
 ::-webkit-scrollbar{width:8px; height:8px;}
 ::-webkit-scrollbar-thumb{background:#d8cec2; border-radius:8px;}
+
+/* ---- Schedule tab ("جدولي") ---- */
+.sch-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.sch-viewtoggle{display:inline-flex;background:#fff;border:1.5px solid var(--border);border-radius:10px;padding:4px;gap:4px;}
+.sch-viewtoggle button{all:unset;cursor:pointer;padding:8px 14px;border-radius:7px;font-size:12.5px;font-weight:800;color:var(--muted);}
+.sch-viewtoggle button.active{background:var(--charcoal);color:#fff;}
+.sch-grid-wrap{background:#fff;border:1px solid var(--border);border-radius:14px;overflow:auto;}
+.sch-grid{display:grid;grid-template-columns:60px repeat(7,minmax(140px,1fr));min-width:880px;position:relative;}
+.sch-corner{position:sticky;top:0;right:0;z-index:5;background:#fff;border-bottom:1px solid var(--border);border-left:1px solid var(--border);}
+.sch-daylabel{position:sticky;top:0;z-index:3;background:#fff;border-bottom:1px solid var(--border);border-left:1px solid var(--border);padding:10px 6px;text-align:center;font-weight:900;font-size:13px;}
+.sch-daylabel.off{color:var(--muted);}
+.sch-hourlabel{position:sticky;right:0;z-index:2;background:#fff;border-left:1px solid var(--border);border-bottom:1px solid #f1ece5;font-size:10px;color:var(--muted);text-align:center;padding-top:2px;font-weight:800;height:48px;}
+.sch-cell{border-left:1px solid var(--border);border-bottom:1px solid #f1ece5;height:48px;}
+.sch-event{position:absolute;right:3px;left:3px;border-radius:8px;padding:4px 6px;font-size:10.5px;line-height:1.3;font-weight:800;color:#fff;overflow:hidden;cursor:pointer;box-shadow:0 3px 8px -3px rgba(0,0,0,.35);}
+.sch-event .t1{font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sch-event .t2{font-weight:600;opacity:.9;font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sch-event.school{background-image:repeating-linear-gradient(135deg,var(--charcoal),var(--charcoal) 7px,#2a221c 7px,#2a221c 14px);}
+.sch-event.center{background:var(--red);}
+.sch-event.online{background:var(--green);}
+.sch-event.private{background:var(--amber);}
+.sch-event.conflict{outline:2.5px solid var(--rose);outline-offset:1px;}
+.sch-daily-list{display:flex;flex-direction:column;gap:10px;}
+.sch-daily-card{display:flex;align-items:center;gap:12px;}
+.sch-daily-card.conflict{border-color:var(--rose);background:var(--rose-bg);}
+.sch-dot{width:9px;height:34px;border-radius:5px;flex-shrink:0;}
+.sch-dot.school{background-image:repeating-linear-gradient(135deg,var(--charcoal),var(--charcoal) 4px,#2a221c 4px,#2a221c 8px);}
+.sch-dot.center{background:var(--red);}
+.sch-dot.online{background:var(--green);}
+.sch-dot.private{background:var(--amber);}
+.sch-slot-day h4{margin:0 0 8px;font-size:14px;font-weight:900;display:flex;align-items:center;gap:8px;}
+.sch-slot-day.closed{opacity:.55;}
+.sch-slot-row{display:flex;flex-wrap:wrap;gap:8px;}
+.sch-slot-btn{border:1.5px solid var(--green);background:var(--green-bg);color:var(--green);border-radius:9px;padding:7px 13px;font-family:inherit;font-weight:800;font-size:12px;cursor:pointer;}
+.sch-slot-btn.taken{border-color:var(--border);background:#f4efe8;color:var(--muted);cursor:not-allowed;text-decoration:line-through;}
+.sch-widget-row{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;}
+.sch-widget-row:last-child{border-bottom:none;}
 </style>
 </head>
 <body>
@@ -517,6 +553,7 @@ function App(){
     {id:'grades', label:'الدرجات', icon:'✎'},
     {id:'payments', label:'المصروفات', icon:'৳'},
     {id:'private', label:'الدروس الخصوصية', icon:'✦'},
+    {id:'schedule', label:'جدولي', icon:'🗓'},
     {id:'accounting', label:'الحسابات', icon:'⎘'},
     {id:'reports', label:'التقارير الشهرية', icon:'▤'},
   ];
@@ -529,7 +566,7 @@ function App(){
           {LOGO(74)}
         </div>
         <div className="nav">
-          {NAV.filter(n=> n.id!=='accounting' || isAdmin).map(n=>(
+          {NAV.filter(n=> (n.id!=='accounting' && n.id!=='schedule') || isAdmin).map(n=>(
             <button key={n.id} className={tab===n.id?'active':''} onClick={()=>setTab(n.id)}>
               <span className="nav-icon">{n.icon}</span>{n.label}
             </button>
@@ -565,6 +602,7 @@ function App(){
         {tab==='grades' && <GradesTab {...{groups,students,grades,persistGrades,studentsInGroup,isAdmin}} />}
         {tab==='payments' && <PaymentsTab {...{students,groups,payments,persistPayments,groupById,setReceiptData,isAdmin}} />}
         {tab==='private' && <PrivateLessonsTab {...{teachers,privateLessons,persistPrivateLessons,isAdmin}} />}
+        {tab==='schedule' && isAdmin && <ScheduleTab />}
         {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth}} />}
         {tab==='reports' && <ReportsTab {...{students,groups,attendance,grades,payments,groupById}} />}
       </div>
@@ -870,6 +908,7 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
 
   return (
     <div>
+      <CenterScheduleWidget />
       <div className="topbar">
         <div><h1>المجموعات والمدرسين</h1><div className="date">{groups.length} مجموعة — {teachers.length} مدرس{!isAdmin && ' — عرض فقط'}</div></div>
         {isAdmin && (
@@ -1410,6 +1449,462 @@ function PrivateLessonForm({pkg,teachers,onCancel,onSave}){
         <button className="btn btn-primary" onClick={()=>{ if(!f.studentName.trim()){alert('أدخل اسم الطالب');return;} onSave({...f,pricePerPackage:Number(f.pricePerPackage)||0}); }}>حفظ</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
       </div>
+    </div>
+  );
+}
+
+// ============================= Schedule ("جدولي") — admin-only personal weekly schedule =============================
+// Firestore collection: scheduleEvents. Business rules per Mohamed's real constraints:
+// - School: Sun-Thu, fixed, 07:30-15:15, computed client-side (never stored).
+// - Center room: only Sun/Mon/Wed/Thu, groups start 4pm-8pm (a rented teacher uses the
+//   room Tue/Sat until 8pm, so the center is closed those two days).
+// - Online/Private: same 4 days as center but only after 9pm; Tue/Fri/Sat open 4pm-10pm.
+const SCHED_DAY_NAMES = ["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
+const SCHED_DAY_SHORT = ["أحد","اثنين","ثلاثاء","أربعاء","خميس","جمعة","سبت"];
+const SCHED_GRID_START = 7*60, SCHED_GRID_END = 23*60;
+const SCHOOL_DAYS = [0,1,2,3,4];
+const SCHOOL_START_T = "07:30", SCHOOL_END_T = "15:15";
+const CENTER_DAYS = [0,1,3,4];
+const CENTER_START = 16*60, CENTER_LAST = 20*60;
+const ONLINE_RESTRICTED_DAYS = [0,1,3,4];
+const ONLINE_RESTRICTED_START = 21*60, ONLINE_RESTRICTED_LAST = 22*60;
+const ONLINE_OPEN_DAYS = [2,5,6];
+const ONLINE_OPEN_START = 16*60, ONLINE_OPEN_LAST = 22*60;
+
+const schedTimeToMin = (t) => { const [h,m]=t.split(':').map(Number); return h*60+m; };
+const schedMinToTime = (min) => { const h=Math.floor(min/60), m=min%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`; };
+const schedFmt12 = (t) => { const [h,m]=t.split(':').map(Number); const p=h>=12?'م':'ص'; let hh=h%12; if(hh===0)hh=12; return `${hh}:${String(m).padStart(2,'0')} ${p}`; };
+const schedTypeLabel = (t) => ({school:'المدرسة',center:'مجموعة سنتر',online:'أونلاين',private:'خصوصي/منزلي'}[t]||t);
+
+// ---- Booking card (PNG) — drawn on a canvas, uses the same LOGO_SRC/brand colors as the rest of the app ----
+const SCHED_TERM_START = '1 سبتمبر'; // start of the new academic year, shown on every card
+
+function schedDrawRoundedRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+function schedWrapCenteredText(ctx, text, cx, y, maxWidth, lineHeight){
+  ctx.textAlign = 'center';
+  const words = text.split(' ');
+  let line = '', lines = [];
+  words.forEach(w=>{
+    const test = line ? line+' '+w : w;
+    if(ctx.measureText(test).width > maxWidth && line){ lines.push(line); line = w; }
+    else line = test;
+  });
+  if(line) lines.push(line);
+  lines.forEach((l,i)=>ctx.fillText(l, cx, y + i*lineHeight));
+  return lines.length;
+}
+
+async function generateBookingCard(event){
+  if(document.fonts && document.fonts.ready){ try{ await document.fonts.ready; }catch(e){} }
+  return new Promise((resolve,reject)=>{
+    const W=1080, H=1350;
+    const canvas = document.createElement('canvas');
+    canvas.width=W; canvas.height=H;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#faf6f1';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#1a1512';
+    ctx.fillRect(0,0,W,300);
+    ctx.fillStyle = '#FF0000';
+    ctx.fillRect(0,300,W,10);
+
+    const logo = new Image();
+    logo.onload = () => {
+      const logoSize = 150, lx = W/2, ly = 150;
+      ctx.save();
+      ctx.beginPath(); ctx.arc(lx,ly,logoSize/2,0,Math.PI*2); ctx.closePath();
+      ctx.fillStyle='#fff'; ctx.fill(); ctx.clip();
+      ctx.drawImage(logo, lx-logoSize/2, ly-logoSize/2, logoSize, logoSize);
+      ctx.restore();
+
+      ctx.direction = 'rtl';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#fff';
+      ctx.font = '900 34px Tajawal, sans-serif';
+      ctx.fillText('SamySchool', W/2, 270);
+
+      ctx.fillStyle = '#1a1512';
+      ctx.font = '900 40px Tajawal, sans-serif';
+      ctx.fillText('بطاقة حجز مكانك 🎓', W/2, 390);
+
+      const typeLabel = event.type==='center'?'مجموعة سنتر':event.type==='online'?'حصص أونلاين':'درس خصوصي';
+      const typeColor = event.type==='center'?'#FF0000':event.type==='online'?'#1a8a4a':'#c07a00';
+      ctx.font = '800 28px Tajawal, sans-serif';
+      const badgeW = ctx.measureText(typeLabel).width + 70;
+      const badgeX = W/2 - badgeW/2, badgeY = 440, badgeH = 60;
+      ctx.fillStyle = typeColor;
+      schedDrawRoundedRect(ctx,badgeX,badgeY,badgeW,badgeH,30);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(typeLabel, W/2, badgeY+40);
+
+      ctx.fillStyle = '#1a1512';
+      ctx.font = '900 46px Tajawal, sans-serif';
+      schedWrapCenteredText(ctx, event.name, W/2, 580, 880, 56);
+
+      ctx.strokeStyle = '#e9e0d6';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(140,720); ctx.lineTo(W-140,720); ctx.stroke();
+
+      const daysText = event.days.map(d=>SCHED_DAY_NAMES[d]).join(' و ');
+      const rows = [
+        ['📅 الأيام', daysText],
+        ['⏰ الميعاد', schedFmt12(event.start)],
+        ['🗓 بداية الدراسة', SCHED_TERM_START],
+      ];
+      if(event.area) rows.push(['📍 العنوان', event.area]);
+      let ry = 800;
+      rows.forEach(([label,val])=>{
+        ctx.textAlign = 'right';
+        ctx.font = '700 26px Tajawal, sans-serif';
+        ctx.fillStyle = '#8a7f78';
+        ctx.fillText(label, W-140, ry);
+        ctx.font = '900 30px Tajawal, sans-serif';
+        ctx.fillStyle = '#1a1512';
+        ctx.fillText(val, W-140, ry+42);
+        ry += 110;
+      });
+
+      ctx.textAlign = 'center';
+      ctx.font = '700 22px Tajawal, sans-serif';
+      ctx.fillStyle = '#8a7f78';
+      ctx.fillText('يرجى الحضور في الموعد المحدد — بالتوفيق 🌟', W/2, H-80);
+
+      resolve(canvas.toDataURL('image/png'));
+    };
+    logo.onerror = reject;
+    logo.src = LOGO_SRC;
+  });
+}
+
+const schedSchoolBlocks = () => {
+  const dur = schedTimeToMin(SCHOOL_END_T) - schedTimeToMin(SCHOOL_START_T);
+  return SCHOOL_DAYS.map(d=>({id:'school_'+d, type:'school', name:'المدرسة (دوام رسمي)', area:'', link:'', days:[d], start:SCHOOL_START_T, duration:dur, fixed:true}));
+};
+const schedOccurrences = (events) => {
+  const out = [];
+  events.forEach(ev=>{ (ev.days||[]).forEach(d=>{ const startMin = schedTimeToMin(ev.start); out.push({...ev, day:d, startMin, endMin:startMin+ev.duration}); }); });
+  return out;
+};
+const schedOverlaps = (a,b) => a.startMin < b.endMin && b.startMin < a.endMin;
+const schedWithConflicts = (occs) => {
+  const byDay = {};
+  occs.forEach(o=>{ (byDay[o.day] ||= []).push(o); });
+  const flagged = new Set();
+  Object.values(byDay).forEach(list=>{
+    for(let i=0;i<list.length;i++) for(let j=i+1;j<list.length;j++){
+      if(schedOverlaps(list[i],list[j])){ flagged.add(list[i].id+'_'+list[i].day); flagged.add(list[j].id+'_'+list[j].day); }
+    }
+  });
+  return occs.map(o=>({...o, conflict: flagged.has(o.id+'_'+o.day)}));
+};
+const schedSlotsForDay = (day, kind, allEvents) => {
+  let open, startMin, lastStart, step=60;
+  if(kind==='center'){
+    open = CENTER_DAYS.includes(day); startMin=CENTER_START; lastStart=CENTER_LAST;
+  }else{
+    if(ONLINE_RESTRICTED_DAYS.includes(day)){ open=true; startMin=ONLINE_RESTRICTED_START; lastStart=ONLINE_RESTRICTED_LAST; }
+    else if(ONLINE_OPEN_DAYS.includes(day)){ open=true; startMin=ONLINE_OPEN_START; lastStart=ONLINE_OPEN_LAST; }
+    else open=false;
+  }
+  if(!open) return {open:false, slots:[]};
+  const occs = schedOccurrences(allEvents).filter(o=>o.day===day);
+  const slots = [];
+  for(let m=startMin;m<=lastStart;m+=step){
+    const cand = {startMin:m, endMin:m+60};
+    const taken = occs.some(o=>schedOverlaps(o,cand));
+    slots.push({start:schedMinToTime(m), taken});
+  }
+  return {open:true, slots};
+};
+
+function ScheduleTab(){
+  const [events,setEvents] = useState([]);
+  const [view,setView] = useState('weekly');
+  const [filters,setFilters] = useState(new Set(['school','center','online','private']));
+  const [dailyDay,setDailyDay] = useState(new Date().getDay());
+  const [slotTab,setSlotTab] = useState('center');
+  const [editing,setEditing] = useState(null);
+
+  useEffect(()=>{
+    const unsub = db.collection('scheduleEvents').onSnapshot(snap=>{
+      setEvents(snap.docs.map(d=>({id:d.id, ...d.data()})));
+    }, err=>console.error(err));
+    return unsub;
+  },[]);
+
+  const allEvents = [...schedSchoolBlocks(), ...events];
+
+  const save = (data) => {
+    const payload = {type:data.type, name:data.name, area:data.area||'', link:data.link||'', days:data.days, start:data.start, duration:data.duration};
+    if(data.id) db.collection('scheduleEvents').doc(data.id).update(payload).catch(err=>alert('حصل خطأ: '+err.message));
+    else db.collection('scheduleEvents').add(payload).catch(err=>alert('حصل خطأ: '+err.message));
+    setEditing(null);
+  };
+  const remove = (id) => {
+    if(!confirm('حذف هذا الموعد نهائيًا؟')) return;
+    db.collection('scheduleEvents').doc(id).delete().catch(err=>alert('حصل خطأ: '+err.message));
+    setEditing(null);
+  };
+  const resetAll = () => {
+    if(!confirm('حذف كل مواعيد السنتر/الأونلاين/الخصوصي المضافة؟ مواعيد المدرسة هتفضل زي ما هي.')) return;
+    events.forEach(ev=>db.collection('scheduleEvents').doc(ev.id).delete());
+  };
+  const toggleFilter = (t) => {
+    setFilters(prev=>{
+      const next = new Set(prev);
+      if(next.has(t)){ if(next.size>1) next.delete(t); } else next.add(t);
+      return next;
+    });
+  };
+
+  const filteredOccs = schedWithConflicts(schedOccurrences(allEvents.filter(e=>filters.has(e.type))));
+  const chipColor = (t) => t==='school'?'var(--charcoal)':t==='center'?'var(--red)':t==='online'?'var(--green)':'var(--amber)';
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>جدولي الأسبوعي</h1><div className="date">المدرسة، السنتر، الأونلاين، والخصوصي في مكان واحد</div></div>
+        <div style={{display:'flex',gap:10}}>
+          <button className="btn btn-ghost btn-sm" onClick={resetAll}>تفريغ الجدول</button>
+          <button className="btn btn-primary" onClick={()=>setEditing({id:null,type:'center',name:'',area:'',link:'',days:[],start:'16:00',duration:60})}>+ إضافة موعد</button>
+        </div>
+      </div>
+
+      <div className="sch-toolbar">
+        <div className="sch-viewtoggle">
+          <button className={view==='weekly'?'active':''} onClick={()=>setView('weekly')}>أسبوعي</button>
+          <button className={view==='daily'?'active':''} onClick={()=>setView('daily')}>يومي</button>
+          <button className={view==='slots'?'active':''} onClick={()=>setView('slots')}>الأماكن الفاضية</button>
+        </div>
+        {view!=='slots' && (
+          <div className="chip-row">
+            {[['school','المدرسة'],['center','السنتر'],['online','أونلاين'],['private','خصوصي']].map(([t,label])=>(
+              <div key={t} className={"chip "+(filters.has(t)?'active':'')} onClick={()=>toggleFilter(t)} style={filters.has(t)?{background:chipColor(t),borderColor:'transparent'}:{}}>{label}</div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {view==='daily' && (
+        <div className="chip-row" style={{marginBottom:14}}>
+          {SCHED_DAY_SHORT.map((name,i)=>(
+            <div key={i} className={"chip "+(dailyDay===i?'active':'')} onClick={()=>setDailyDay(i)}>{name}</div>
+          ))}
+        </div>
+      )}
+
+      {view==='weekly' && <ScheduleWeeklyGrid occs={filteredOccs} onEdit={(ev)=>setEditing(ev)} />}
+      {view==='daily' && <ScheduleDailyList occs={filteredOccs.filter(o=>o.day===dailyDay)} onEdit={(ev)=>setEditing(ev)} />}
+      {view==='slots' && (
+        <div>
+          <div className="chip-row" style={{marginBottom:12}}>
+            <div className={"chip "+(slotTab==='center'?'active':'')} onClick={()=>setSlotTab('center')} style={slotTab==='center'?{background:'var(--red)',borderColor:'transparent'}:{}}>مواعيد السنتر الفاضية</div>
+            <div className={"chip "+(slotTab==='online'?'active':'')} onClick={()=>setSlotTab('online')} style={slotTab==='online'?{background:'var(--green)',borderColor:'transparent'}:{}}>مواعيد الأونلاين/الخصوصي الفاضية</div>
+          </div>
+          <div className="small muted" style={{marginBottom:14,lineHeight:1.9}}>
+            {slotTab==='center'
+              ? 'السنتر متاح فقط الأحد والاثنين والأربعاء والخميس، من 4 إلى 8 مساءً. الثلاثاء والسبت غير متاحين لأن مدرّس آخر مستأجر المكان.'
+              : 'الأونلاين والخصوصي: الأحد والاثنين والأربعاء والخميس من 9 مساءً. الثلاثاء والجمعة والسبت من 4 لـ 10 مساءً.'}
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {SCHED_DAY_NAMES.map((name,d)=>{
+              const {open,slots} = schedSlotsForDay(d, slotTab, allEvents);
+              const free = slots.filter(s=>!s.taken).length;
+              return (
+                <div key={d} className={"card sch-slot-day "+(open?'':'closed')}>
+                  <h4>{name} {open && <span className="badge badge-gray">{free} فاضي من {slots.length}</span>}{!open && <span className="small muted"> — غير متاح</span>}</h4>
+                  {open && (
+                    <div className="sch-slot-row">
+                      {slots.map(s=>(
+                        <button key={s.start} className={"sch-slot-btn "+(s.taken?'taken':'')} disabled={s.taken}
+                          onClick={()=>setEditing({id:null,type:slotTab==='center'?'center':'online',name:'',area:'',link:'',days:[d],start:s.start,duration:60})}>
+                          {schedFmt12(s.start)} {s.taken?'· محجوز':'· فاضي'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {editing && (
+        <Modal title={editing.id?'تعديل الموعد':'إضافة موعد جديد'} onClose={()=>setEditing(null)}>
+          <ScheduleForm event={editing} onCancel={()=>setEditing(null)} onSave={save} onDelete={editing.id?()=>remove(editing.id):null} allEvents={allEvents} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ScheduleWeeklyGrid({occs,onEdit}){
+  const rows = (SCHED_GRID_END-SCHED_GRID_START)/60;
+  return (
+    <div className="sch-grid-wrap">
+      <div className="sch-grid" style={{gridTemplateRows:`44px repeat(${rows},48px)`}}>
+        <div className="sch-corner"></div>
+        {SCHED_DAY_SHORT.map((d,i)=>(<div key={i} className={"sch-daylabel "+((i===5||i===6)?'off':'')}>{d}</div>))}
+        {Array.from({length:rows}).map((_,r)=>{
+          const hourMin = SCHED_GRID_START + r*60;
+          return (
+            <React.Fragment key={r}>
+              <div className="sch-hourlabel">{schedFmt12(schedMinToTime(hourMin)).replace(':00','')}</div>
+              {SCHED_DAY_SHORT.map((_,d)=>(<div key={d} className="sch-cell"></div>))}
+            </React.Fragment>
+          );
+        })}
+        {occs.filter(o=>o.startMin>=SCHED_GRID_START && o.startMin<SCHED_GRID_END).map(o=>{
+          const top = 44 + (o.startMin-SCHED_GRID_START)*(48/60);
+          const height = Math.max(20, o.duration*(48/60)-4);
+          const colW = `calc((100% - 60px)/7)`;
+          return (
+            <div key={o.id+'_'+o.day} className={"sch-event "+o.type+(o.conflict?' conflict':'')}
+              style={{top, height, right:`calc(60px + ${o.day} * ${colW} + 3px)`, width:`calc(${colW} - 6px)`}}
+              onClick={()=> o.fixed ? alert('موعد المدرسة ثابت ولا يمكن تعديله من هنا.') : onEdit(o)}>
+              <div className="t1">{o.name}{o.conflict?' ⚠':''}</div>
+              <div className="t2">{schedFmt12(o.start)} · {o.duration>=60?(o.duration/60)+' س':o.duration+' د'}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ScheduleDailyList({occs,onEdit}){
+  const sorted = [...occs].sort((a,b)=>a.startMin-b.startMin);
+  if(sorted.length===0) return <div className="card"><Empty icon="📅" text="لا توجد مواعيد هذا اليوم" /></div>;
+  return (
+    <div className="sch-daily-list">
+      {sorted.map(o=>(
+        <div key={o.id+'_'+o.day} className={"card sch-daily-card "+(o.conflict?'conflict':'')}>
+          <div className={"sch-dot "+o.type}></div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:900,fontSize:14}}>{o.name}{o.conflict?' ⚠':''}</div>
+            <div className="small muted">{schedFmt12(o.start)} – {schedFmt12(schedMinToTime(o.endMin))} · {schedTypeLabel(o.type)}{o.area?' · '+o.area:''}{o.link?' · رابط متاح':''}</div>
+          </div>
+          {!o.fixed && <button className="btn btn-ghost btn-sm" onClick={()=>onEdit(o)}>تعديل</button>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ScheduleForm({event,onCancel,onSave,onDelete,allEvents}){
+  const [f,setF] = useState(event);
+  const set = (k,v) => setF({...f,[k]:v});
+  const toggleDay = (d) => set('days', f.days.includes(d) ? f.days.filter(x=>x!==d) : [...f.days,d].sort());
+
+  const conflictPreview = useMemo(()=>{
+    if(!f.start || f.days.length===0) return false;
+    const candidate = {id:f.id||'__draft__', days:f.days, start:f.start, duration:f.duration};
+    const others = allEvents.filter(e=>e.id!==(f.id||''));
+    const occs = schedWithConflicts(schedOccurrences([...others, candidate]));
+    return occs.some(o=>(o.id==='__draft__'||o.id===f.id) && o.conflict);
+  },[f,allEvents]);
+
+  const typeColor = (t) => t==='center'?'var(--red)':t==='online'?'var(--green)':'var(--amber)';
+
+  const downloadCard = async () => {
+    if(!f.name.trim()){ alert('اكتب اسم المجموعة/الطالب الأول'); return; }
+    if(f.days.length===0){ alert('اختر يوم واحد على الأقل الأول'); return; }
+    try{
+      const dataUrl = await generateBookingCard(f);
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `بطاقة حجز - ${f.name}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+    }catch(err){
+      console.error(err);
+      alert('حصل خطأ أثناء إنشاء الكارت، حاول تاني.');
+    }
+  };
+
+  return (
+    <div>
+      <Field label="نوع الموعد">
+        <div className="chip-row">
+          {[['center','مجموعة سنتر'],['online','أونلاين'],['private','خصوصي/منزلي']].map(([t,label])=>(
+            <div key={t} className={"chip "+(f.type===t?'active':'')} onClick={()=>set('type',t)} style={f.type===t?{background:typeColor(t),borderColor:'transparent'}:{}}>{label}</div>
+          ))}
+        </div>
+      </Field>
+      <Field label={f.type==='private'?'اسم الطالب':'اسم المجموعة/الطالب'}>
+        <input value={f.name} onChange={e=>set('name',e.target.value)} placeholder="مثال: الصف الثالث الثانوي - مجموعة أ" />
+      </Field>
+      {f.type==='private' && <Field label="العنوان / المنطقة"><input value={f.area} onChange={e=>set('area',e.target.value)} /></Field>}
+      {f.type==='online' && <Field label="رابط المنصة (اختياري)"><input value={f.link} onChange={e=>set('link',e.target.value)} /></Field>}
+      <Field label="أيام الحضور">
+        <div className="chip-row">
+          {SCHED_DAY_SHORT.map((name,d)=>(
+            <div key={d} className={"chip "+(f.days.includes(d)?'active':'')} onClick={()=>toggleDay(d)}>{name}</div>
+          ))}
+        </div>
+      </Field>
+      <div className="grid grid-2">
+        <Field label="وقت البدء"><input type="time" value={f.start} onChange={e=>set('start',e.target.value)} /></Field>
+        <Field label="المدة الزمنية">
+          <select value={f.duration} onChange={e=>set('duration',Number(e.target.value))}>
+            <option value={60}>ساعة واحدة</option>
+            <option value={90}>ساعة ونصف</option>
+            <option value={120}>ساعتان</option>
+          </select>
+        </Field>
+      </div>
+      {conflictPreview && <div className="small" style={{color:'var(--rose)',fontWeight:800,marginBottom:8}}>⚠ هذا الموعد يتعارض مع موعد آخر — هيتحفظ برضه لكن هيتحدد باللون الأحمر.</div>}
+      <button className="btn btn-ghost" style={{width:'100%',marginBottom:14,justifyContent:'center'}} onClick={downloadCard}>⬇ تحميل كارت الحجز (PNG) لإرساله للطالب</button>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{
+          if(!f.name.trim()){ alert('أدخل اسم المجموعة/الطالب'); return; }
+          if(f.days.length===0){ alert('اختر يوم واحد على الأقل'); return; }
+          onSave(f);
+        }}>حفظ</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+        {onDelete && <button className="btn btn-danger" style={{marginRight:'auto'}} onClick={onDelete}>حذف</button>}
+      </div>
+    </div>
+  );
+}
+
+// Read-only widget: shows ONLY center-group time slots, visible to secretary accounts too
+// (Firestore rules restrict non-admin reads to type=='center' documents — see setup notes).
+function CenterScheduleWidget(){
+  const [centerEvents,setCenterEvents] = useState([]);
+  const [loaded,setLoaded] = useState(false);
+  useEffect(()=>{
+    const unsub = db.collection('scheduleEvents').where('type','==','center').onSnapshot(snap=>{
+      setCenterEvents(snap.docs.map(d=>({id:d.id,...d.data()})));
+      setLoaded(true);
+    }, err=>{ console.error(err); setLoaded(true); });
+    return unsub;
+  },[]);
+
+  if(!loaded || centerEvents.length===0) return null;
+
+  const occs = schedOccurrences(centerEvents).sort((a,b)=> a.day-b.day || a.startMin-b.startMin);
+
+  return (
+    <div className="card" style={{marginBottom:20}}>
+      <div className="section-title">مواعيد مجموعات السنتر هذا الأسبوع</div>
+      {occs.map(o=>(
+        <div key={o.id+'_'+o.day} className="sch-widget-row">
+          <span className="badge badge-gray">{SCHED_DAY_SHORT[o.day]}</span>
+          <span style={{fontWeight:800}}>{schedFmt12(o.start)}</span>
+          <span className="muted">{o.name}</span>
+        </div>
+      ))}
     </div>
   );
 }
