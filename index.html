@@ -331,7 +331,7 @@ const db = firebase.firestore();
 const GOOGLE_CLIENT_ID = "REPLACE_WITH_YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
 const SCHEDULE_OWNER_NAME_EN = "Mr. Mohamed Samy";
 
-const COLLECTIONS = ['teachers','groups','students','attendance','grades','payments','expenses','privateLessons'];
+const COLLECTIONS = ['teachers','groups','students','attendance','grades','payments','expenses','privateLessons','refunds','teacherPayouts'];
 
 // Diffs newArray against the last-known state for a collection and writes only
 // the changed/added/removed documents to Firestore, so history-heavy
@@ -360,6 +360,24 @@ async function logActivity(user, role, collectionName, changes){
       dateKey: todayISO(),
     });
   }catch(err){ console.error('activity log failed', err); }
+}
+
+// Soft-delete: archives the full item into /trash before removing it from its live collection,
+// so it can be restored later (kept for ~2 months, see TrashTab).
+const TRASH_RETENTION_MS = 60*24*60*60*1000; // ~2 months
+async function removeWithTrash(collectionName, item, currentArray, persistFn, actor){
+  try{
+    await db.collection('trash').add({
+      collection: collectionName,
+      itemId: item.id,
+      data: item,
+      deletedBy: (actor && actor.user) ? actor.user.email : 'unknown',
+      deletedByRole: (actor && actor.role) || 'unknown',
+      deletedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      expiresAtMs: Date.now() + TRASH_RETENTION_MS,
+    });
+  }catch(err){ console.error('trash archive failed', err); }
+  persistFn(currentArray.filter(x=>x.id!==item.id));
 }
 
 function makePersist(name, stateRef, setter, actorRef){
@@ -413,6 +431,237 @@ function Empty({icon,text}){
   return <div className="empty"><div className="empty-icon">{icon}</div>{text}</div>;
 }
 
+// Floating quick-action button — lets the secretary/admin jump straight to the 4 most common
+// daily actions from anywhere in the app, without navigating tabs first.
+function QuickActionsBar({students,groups,payments,persistPayments,grades,persistGrades,attendance,persistAttendance,persistStudents,groupById,studentsInGroup,setReceiptData,isAdmin,actorRef}){
+  const [open,setOpen] = useState(false);
+  const [active,setActive] = useState(null); // 'payment' | 'student' | 'grade' | 'attendance' | null
+
+  const close = () => { setActive(null); setOpen(false); };
+
+  return (
+    <React.Fragment>
+      <div className="no-print" style={{position:'fixed',left:24,bottom:24,zIndex:60,display:'flex',flexDirection:'column',alignItems:'flex-start',gap:10}}>
+        {open && (
+          <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:4}}>
+            <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('payment');setOpen(false);}}>💳 سداد مصروفات</button>
+            <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('student');setOpen(false);}}>👤 إضافة طالب جديد</button>
+            <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('grade');setOpen(false);}}>✎ إضافة درجات</button>
+            <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('attendance');setOpen(false);}}>✓ حضور وغياب</button>
+          </div>
+        )}
+        <button onClick={()=>setOpen(o=>!o)} style={{
+          width:56,height:56,borderRadius:'50%',border:'none',cursor:'pointer',
+          background:'var(--red)',color:'#fff',fontSize:26,fontWeight:900,
+          boxShadow:'0 8px 24px rgba(255,0,0,.4)',lineHeight:1,
+        }}>{open?'✕':'⚡'}</button>
+      </div>
+
+      {active==='payment' && (
+        <Modal title="سداد مصروفات — بالكود أو الاسم" onClose={close}>
+          <QuickPaymentPanel students={students} payments={payments} persistPayments={persistPayments} groupById={groupById} setReceiptData={setReceiptData} isAdmin={isAdmin} onDone={close} />
+        </Modal>
+      )}
+      {active==='student' && (
+        <Modal title="إضافة طالب جديد" onClose={close}>
+          <StudentForm
+            student={{id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',feeOverride:'',joinDate:todayISO(),notes:'',status:'active'}}
+            groups={groups}
+            onCancel={close}
+            onSave={(data)=>{ const {isNew, ...clean} = data; persistStudents([...students, clean]); close(); }}
+          />
+        </Modal>
+      )}
+      {active==='grade' && (
+        <Modal title="إضافة درجة لطالب" onClose={close}>
+          <QuickGradePanel students={students} groups={groups} grades={grades} persistGrades={persistGrades} onDone={close} />
+        </Modal>
+      )}
+      {active==='attendance' && (
+        <Modal title="تسجيل حضور/غياب سريع" onClose={close}>
+          <QuickAttendancePanel students={students} groupById={groupById} attendance={attendance} persistAttendance={persistAttendance} onDone={close} />
+        </Modal>
+      )}
+    </React.Fragment>
+  );
+}
+
+function studentSearchMatches(students, q){
+  const query = q.trim().toLowerCase();
+  if(!query) return [];
+  return students.filter(s=>
+    s.name.toLowerCase().includes(query) ||
+    studentCode(s.id).toLowerCase().includes(query) ||
+    (s.phone||'').includes(query)
+  ).slice(0,8);
+}
+
+function QuickPaymentPanel({students,payments,persistPayments,groupById,setReceiptData,isAdmin,onDone}){
+  const [query,setQuery] = useState('');
+  const [selected,setSelected] = useState(null);
+  const month = monthKey();
+  const matches = studentSearchMatches(students, query);
+  const record = selected ? payments.find(p=>p.studentId===selected.id && p.month===month) : null;
+  const paid = record && record.paid;
+  const g = selected ? groupById(selected.groupId) : null;
+  const due = selected ? studentFee(selected, g) : 0;
+
+  const registerPayment = () => {
+    const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
+    const nextReceiptNo = payments.filter(p=>p.receiptNo).length + 1;
+    if(record){
+      persistPayments(payments.map(p=>p.id===record.id?{...p, paid:true, paidDate:todayISO(), paidAt:new Date().toISOString(), paidBy:recipientLabel, receiptNo:p.receiptNo||nextReceiptNo}:p));
+    }else{
+      persistPayments([...payments, {id:uid(), studentId:selected.id, month, amount:due, paid:true, paidDate:todayISO(), paidAt:new Date().toISOString(), paidBy:recipientLabel, receiptNo:nextReceiptNo}]);
+    }
+    const paidDateObj = new Date();
+    setReceiptData({
+      receiptNo: (record&&record.receiptNo) || nextReceiptNo,
+      studentName: selected.name, groupName: g?g.name:'—', month, amount: due, date: todayISO(),
+      dayName: SCHED_DAY_NAMES[paidDateObj.getDay()],
+      time: paidDateObj.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit',hour12:true}),
+      recipient: recipientLabel,
+    });
+    onDone();
+  };
+
+  return (
+    <div>
+      <Field label="ابحث بالكود أو الاسم">
+        <input autoFocus value={query} onChange={e=>{setQuery(e.target.value); setSelected(null);}} placeholder="اكتب كود الطالب أو اسمه..." />
+      </Field>
+      {!selected && matches.length>0 && (
+        <div style={{border:'1px solid var(--border)',borderRadius:10,overflow:'hidden',marginBottom:14}}>
+          {matches.map(s=>(
+            <div key={s.id} onClick={()=>setSelected(s)} style={{padding:'10px 12px',cursor:'pointer',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between'}}>
+              <span>{s.name}</span><span className="small muted">{studentCode(s.id)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {selected && (
+        <div className="card" style={{marginBottom:14}}>
+          <div style={{fontWeight:900,fontSize:15}}>{selected.name}</div>
+          <div className="small muted" style={{marginTop:2}}>{g?g.name:'بدون مجموعة'} — {monthLabel(month)}</div>
+          <div style={{marginTop:10,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span>القسط المستحق</span><span style={{fontWeight:900,fontSize:17}}>{fmtMoney(due)}</span>
+          </div>
+          <div style={{marginTop:6}}>{paid?<span className="badge badge-green">تم السداد بالفعل</span>:<span className="badge badge-rose">لسه متأخر</span>}</div>
+        </div>
+      )}
+      <div className="modal-actions">
+        {selected && !paid && <button className="btn btn-primary" onClick={registerPayment}>تسجيل السداد وطباعة إيصال</button>}
+        <button className="btn btn-ghost" onClick={onDone}>إغلاق</button>
+      </div>
+    </div>
+  );
+}
+
+function QuickGradePanel({students,groups,grades,persistGrades,onDone}){
+  const [query,setQuery] = useState('');
+  const [selected,setSelected] = useState(null);
+  const [examId,setExamId] = useState('');
+  const [score,setScore] = useState('');
+  const matches = studentSearchMatches(students, query);
+  const studentExams = selected ? grades.filter(g=>g.groupId===selected.groupId).sort((a,b)=>b.date.localeCompare(a.date)) : [];
+  const exam = studentExams.find(e=>e.id===examId);
+
+  const save = () => {
+    if(!exam || score===''){ alert('اختر اختبار وادخل الدرجة'); return; }
+    const updated = {...exam, scores:{...exam.scores, [selected.id]:Number(score)}};
+    persistGrades(grades.map(g=>g.id===exam.id?updated:g));
+    onDone();
+  };
+
+  return (
+    <div>
+      <Field label="ابحث بالكود أو الاسم">
+        <input autoFocus value={query} onChange={e=>{setQuery(e.target.value); setSelected(null); setExamId('');}} placeholder="اكتب كود الطالب أو اسمه..." />
+      </Field>
+      {!selected && matches.length>0 && (
+        <div style={{border:'1px solid var(--border)',borderRadius:10,overflow:'hidden',marginBottom:14}}>
+          {matches.map(s=>(
+            <div key={s.id} onClick={()=>setSelected(s)} style={{padding:'10px 12px',cursor:'pointer',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between'}}>
+              <span>{s.name}</span><span className="small muted">{groups.find(g=>g.id===s.groupId)?.name || 'بدون مجموعة'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {selected && (
+        <div>
+          <div className="small muted" style={{marginBottom:10}}>الطالب: <b>{selected.name}</b></div>
+          {studentExams.length===0 ? <div className="muted small" style={{marginBottom:14}}>مفيش اختبارات مسجلة لمجموعة الطالب ده لسه — أضف اختبار من تبويب الدرجات الأول.</div> : (
+            <React.Fragment>
+              <Field label="الاختبار">
+                <select value={examId} onChange={e=>setExamId(e.target.value)}>
+                  <option value="">اختر اختبار</option>
+                  {studentExams.map(e=><option key={e.id} value={e.id}>{e.name} — {e.date} (من {e.maxScore})</option>)}
+                </select>
+              </Field>
+              {exam && <Field label={`الدرجة (من ${exam.maxScore})`}><input type="number" value={score} onChange={e=>setScore(e.target.value)} /></Field>}
+            </React.Fragment>
+          )}
+        </div>
+      )}
+      <div className="modal-actions">
+        {selected && exam && <button className="btn btn-primary" onClick={save}>حفظ الدرجة</button>}
+        <button className="btn btn-ghost" onClick={onDone}>إغلاق</button>
+      </div>
+    </div>
+  );
+}
+
+function QuickAttendancePanel({students,groupById,attendance,persistAttendance,onDone}){
+  const [query,setQuery] = useState('');
+  const [selected,setSelected] = useState(null);
+  const matches = studentSearchMatches(students, query);
+  const date = todayISO();
+  const g = selected ? groupById(selected.groupId) : null;
+  const rec = selected ? attendance.find(a=>a.groupId===selected.groupId && a.date===date) : null;
+  const currentStatus = rec && rec.records ? rec.records[selected?.id] : undefined;
+
+  const mark = (status) => {
+    const others = attendance.filter(a=>!(a.groupId===selected.groupId && a.date===date));
+    const base = rec ? {...rec} : {id:uid(), groupId:selected.groupId, date, records:{}};
+    base.records = {...base.records, [selected.id]:status};
+    persistAttendance([...others, base]);
+    onDone();
+  };
+
+  return (
+    <div>
+      <Field label="ابحث بالكود أو الاسم">
+        <input autoFocus value={query} onChange={e=>{setQuery(e.target.value); setSelected(null);}} placeholder="اكتب كود الطالب أو اسمه..." />
+      </Field>
+      {!selected && matches.length>0 && (
+        <div style={{border:'1px solid var(--border)',borderRadius:10,overflow:'hidden',marginBottom:14}}>
+          {matches.map(s=>(
+            <div key={s.id} onClick={()=>setSelected(s)} style={{padding:'10px 12px',cursor:'pointer',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between'}}>
+              <span>{s.name}</span><span className="small muted">{studentCode(s.id)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {selected && (
+        <div className="card" style={{marginBottom:14}}>
+          <div style={{fontWeight:900,fontSize:15}}>{selected.name}</div>
+          <div className="small muted" style={{marginTop:2}}>{g?g.name:'بدون مجموعة'} — النهاردة</div>
+          <div style={{marginTop:6}}>
+            {currentStatus==='present' && <span className="badge badge-green">مسجّل حاضر</span>}
+            {currentStatus==='absent' && <span className="badge badge-rose">مسجّل غائب</span>}
+            {!currentStatus && <span className="badge badge-gray">لسه مش مسجل</span>}
+          </div>
+        </div>
+      )}
+      <div className="modal-actions">
+        {selected && <button className="btn btn-primary" onClick={()=>mark('present')}>✓ حاضر</button>}
+        {selected && <button className="btn btn-danger" onClick={()=>mark('absent')}>✕ غائب</button>}
+        <button className="btn btn-ghost" onClick={onDone}>إغلاق</button>
+      </div>
+    </div>
+  );
+}
+
 function GlobalHeader({isAdmin}){
   const [now,setNow] = useState(new Date());
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t); },[]);
@@ -464,6 +713,8 @@ function App(){
   const [payments,setPayments] = useState([]);
   const [expenses,setExpenses] = useState([]);
   const [privateLessons,setPrivateLessons] = useState([]);
+  const [refunds,setRefunds] = useState([]);
+  const [teacherPayouts,setTeacherPayouts] = useState([]);
 
   const teachersRef = React.useRef([]); teachersRef.current = teachers;
   const groupsRef = React.useRef([]); groupsRef.current = groups;
@@ -473,6 +724,8 @@ function App(){
   const paymentsRef = React.useRef([]); paymentsRef.current = payments;
   const expensesRef = React.useRef([]); expensesRef.current = expenses;
   const privateLessonsRef = React.useRef([]); privateLessonsRef.current = privateLessons;
+  const refundsRef = React.useRef([]); refundsRef.current = refunds;
+  const teacherPayoutsRef = React.useRef([]); teacherPayoutsRef.current = teacherPayouts;
   const actorRef = React.useRef({user:null, role:null});
   useEffect(()=>{ actorRef.current = {user, role}; },[user,role]);
 
@@ -493,12 +746,12 @@ function App(){
   // Live Firestore sync, only once signed in with a known role
   useEffect(()=>{
     if(!user || !role) return;
-    // "expenses" is admin-only by design (see Firestore rules) - secretary accounts
-    // should never even attempt to read it, so it is excluded from their subscription list.
-    const activeCollections = role==='admin' ? COLLECTIONS : COLLECTIONS.filter(c=>c!=='expenses');
+    // "expenses" and "teacherPayouts" are admin-only by design (see Firestore rules) -
+    // secretary accounts should never even attempt to read them.
+    const activeCollections = role==='admin' ? COLLECTIONS : COLLECTIONS.filter(c=>c!=='expenses' && c!=='teacherPayouts');
     let pending = activeCollections.length;
     const settle = () => { if(pending>0){ pending--; if(pending===0) setDataLoaded(true); } };
-    const setters = {teachers:setTeachers, groups:setGroups, students:setStudents, attendance:setAttendance, grades:setGrades, payments:setPayments, expenses:setExpenses, privateLessons:setPrivateLessons};
+    const setters = {teachers:setTeachers, groups:setGroups, students:setStudents, attendance:setAttendance, grades:setGrades, payments:setPayments, expenses:setExpenses, privateLessons:setPrivateLessons, refunds:setRefunds, teacherPayouts:setTeacherPayouts};
     const unsubs = activeCollections.map(name=>
       db.collection(name).onSnapshot(snap=>{
         setters[name](snap.docs.map(d=>({id:d.id, ...d.data()})));
@@ -548,10 +801,14 @@ function App(){
   const persistPayments = React.useCallback(makePersist('payments', paymentsRef, setPayments, actorRef),[]);
   const persistExpenses = React.useCallback(makePersist('expenses', expensesRef, setExpenses, actorRef),[]);
   const persistPrivateLessons = React.useCallback(makePersist('privateLessons', privateLessonsRef, setPrivateLessons, actorRef),[]);
+  const persistRefunds = React.useCallback(makePersist('refunds', refundsRef, setRefunds, actorRef),[]);
+  const persistTeacherPayouts = React.useCallback(makePersist('teacherPayouts', teacherPayoutsRef, setTeacherPayouts, actorRef),[]);
 
   const groupById = useCallback((id)=> groups.find(g=>g.id===id), [groups]);
   const teacherById = useCallback((id)=> teachers.find(t=>t.id===id), [teachers]);
-  const studentsInGroup = useCallback((gid)=> students.filter(s=>s.groupId===gid), [students]);
+  // Frozen students ("تجميد") stay in the system with all their history, but are hidden from
+  // rosters (attendance/grades) and group capacity counts until unfrozen.
+  const studentsInGroup = useCallback((gid)=> students.filter(s=>s.groupId===gid && s.status!=='frozen'), [students]);
 
   // payment status helper for a student in a given month
   const paymentFor = (studentId, mk) => payments.find(p=>p.studentId===studentId && p.month===mk);
@@ -616,6 +873,39 @@ function App(){
     reader.readAsText(file);
   };
 
+  // ---- Automatic cloud backups ----
+  // Every save already goes straight to Firestore (real-time, not batched to end of day),
+  // so a power cut mid-edit only ever risks the single change in progress. On top of that,
+  // this keeps periodic full snapshots for point-in-time recovery: every ~20 minutes while
+  // the app is open, best-effort right when the tab/browser closes, and on demand.
+  const [lastBackupAt,setLastBackupAt] = useState(null);
+  const backupDataRef = React.useRef(null);
+  useEffect(()=>{
+    backupDataRef.current = {teachers,groups,students,attendance,grades,payments,expenses,privateLessons,refunds,teacherPayouts};
+  },[teachers,groups,students,attendance,grades,payments,expenses,privateLessons,refunds,teacherPayouts]);
+
+  const triggerCloudBackup = React.useCallback(async (reason)=>{
+    if(!backupDataRef.current || !user) return;
+    try{
+      await db.collection('backups').add({
+        ...backupDataRef.current,
+        reason,
+        by: user.email,
+        exportedAt: new Date().toISOString(),
+        at: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+      setLastBackupAt(new Date());
+    }catch(err){ console.error('cloud backup failed', err); }
+  },[user]);
+
+  useEffect(()=>{
+    if(!user || !role) return;
+    const interval = setInterval(()=>triggerCloudBackup('periodic'), 20*60*1000);
+    const onClose = () => { triggerCloudBackup('beforeunload'); };
+    window.addEventListener('beforeunload', onClose);
+    return ()=>{ clearInterval(interval); window.removeEventListener('beforeunload', onClose); };
+  },[user,role,triggerCloudBackup]);
+
   if(authLoading){
     return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',fontWeight:800,color:'#8a7f78'}}>جارِ التحقق من الدخول...</div>;
   }
@@ -661,6 +951,8 @@ function App(){
     {id:'grades', label:'الدرجات', icon:'✎'},
     {id:'payments', label:'المصروفات', icon:'৳'},
     {id:'private', label:'الدروس الخصوصية', icon:'✦'},
+    {id:'trash', label:'سلة المحذوفات', icon:'🗑'},
+    {id:'secretaryActivity', label:'نشاط السكرتيرة', icon:'🛡'},
     {id:'schedule', label:'جدولي', icon:'🗓'},
     {id:'accounting', label:'الحسابات', icon:'⎘'},
     {id:'reports', label:'التقارير الشهرية', icon:'▤'},
@@ -670,13 +962,14 @@ function App(){
     <React.Fragment>
     <div className={receiptData?"no-print":""}>
       <GlobalHeader isAdmin={isAdmin} />
+      <QuickActionsBar {...{students,groups,payments,persistPayments,grades,persistGrades,attendance,persistAttendance,persistStudents,groupById,studentsInGroup,setReceiptData,isAdmin,actorRef}} />
       <div className="app">
       <div className="sidebar no-print">
         <div className="brand">
           {LOGO(74)}
         </div>
         <div className="nav">
-          {NAV.filter(n=> (n.id!=='accounting' && n.id!=='schedule') || isAdmin).map(n=>(
+          {NAV.filter(n=> (n.id!=='accounting' && n.id!=='schedule' && n.id!=='secretaryActivity') || isAdmin).map(n=>(
             <button key={n.id} className={tab===n.id?'active':''} onClick={()=>setTab(n.id)}>
               <span className="nav-icon">{n.icon}</span>{n.label}
             </button>
@@ -690,11 +983,15 @@ function App(){
           {isAdmin && (
             <React.Fragment>
               <div style={{marginBottom:8, fontWeight:800, color:'#cfc4b9'}}>نسخ احتياطي</div>
+              <button className="btn btn-ghost btn-sm" style={{width:'100%',marginBottom:6}} onClick={()=>triggerCloudBackup('manual').then(()=>alert('تمت المزامنة الكاملة ✅'))}>🔄 مزامنة كاملة الآن</button>
               <button className="btn btn-ghost btn-sm" style={{width:'100%',marginBottom:6}} onClick={backup}>⭳ تنزيل نسخة احتياطية</button>
-              <label className="btn btn-ghost btn-sm" style={{width:'100%',display:'block',textAlign:'center',cursor:'pointer',marginBottom:10}}>
+              <label className="btn btn-ghost btn-sm" style={{width:'100%',display:'block',textAlign:'center',cursor:'pointer',marginBottom:6}}>
                 ⭱ استرجاع نسخة
                 <input type="file" accept="application/json" style={{display:'none'}} onChange={(e)=>{ if(e.target.files[0]) restore(e.target.files[0]); }} />
               </label>
+              <div className="small" style={{color:'#8f8579',marginBottom:10,fontSize:10.5}}>
+                {lastBackupAt ? `آخر نسخة سحابية: ${lastBackupAt.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})}` : 'مزامنة سحابية تلقائية كل 20 دقيقة'}
+              </div>
             </React.Fragment>
           )}
           <button className="btn btn-ghost btn-sm" style={{width:'100%'}} onClick={()=>auth.signOut()}>⏻ تسجيل الخروج</button>
@@ -703,17 +1000,19 @@ function App(){
 
       <div className="main">
         {tab==='dashboard' && <Dashboard {...{students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab,isAdmin}} />}
-        {tab==='students' && <StudentsTab {...{students,groups,persistStudents,payments,currentMonth,groupById,attendance,isAdmin}} />}
-        {tab==='groups' && <GroupsTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin}} />}
+        {tab==='students' && <StudentsTab {...{students,groups,persistStudents,payments,currentMonth,groupById,attendance,isAdmin,actorRef}} />}
+        {tab==='groups' && <GroupsTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin,actorRef}} />}
         {tab==='attendance' && <AttendanceTab {...{groups,students,attendance,persistAttendance,studentsInGroup}} />}
         {tab==='scan' && <ScanAttendanceTab {...{groups,students,attendance,persistAttendance,payments,groupById}} />}
         {tab==='faces' && <FaceAttendanceTab {...{groups,students,persistStudents,attendance,persistAttendance,payments,groupById}} />}
         {tab==='codes' && <StudentCodesTab {...{students,groups,groupById}} />}
         {tab==='grades' && <GradesTab {...{groups,students,grades,persistGrades,studentsInGroup,isAdmin}} />}
-        {tab==='payments' && <PaymentsTab {...{students,groups,payments,persistPayments,groupById,setReceiptData,isAdmin}} />}
-        {tab==='private' && <PrivateLessonsTab {...{teachers,privateLessons,persistPrivateLessons,isAdmin}} />}
+        {tab==='payments' && <PaymentsTab {...{students,groups,payments,persistPayments,groupById,setReceiptData,isAdmin,refunds,persistRefunds,actorRef}} />}
+        {tab==='private' && <PrivateLessonsTab {...{teachers,privateLessons,persistPrivateLessons,isAdmin,actorRef}} />}
+        {tab==='trash' && <TrashTab {...{isAdmin}} />}
+        {tab==='secretaryActivity' && isAdmin && <SecretaryActivityReportTab />}
         {tab==='schedule' && isAdmin && <ScheduleTab />}
-        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth}} />}
+        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}} />}
         {tab==='reports' && <ReportsTab {...{students,groups,attendance,grades,payments,groupById}} />}
       </div>
       </div>
@@ -756,7 +1055,7 @@ function LoginScreen(){
 
 // Admin-only daily security report: every create/edit/delete the secretary makes anywhere
 // in the system today, newest first. Backed by the activityLog collection (see makePersist).
-function SecretaryActivityCard(){
+function SecretaryActivityCard({setTab}){
   const [logs,setLogs] = useState([]);
   useEffect(()=>{
     const today = todayISO();
@@ -772,20 +1071,138 @@ function SecretaryActivityCard(){
 
   return (
     <div className="card" style={{marginBottom:18, borderColor:'var(--charcoal)'}}>
-      <div className="section-title">🛡 نشاط السكرتيرة اليوم ({logs.length})</div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <div className="section-title" style={{margin:0}}>🛡 نشاط السكرتيرة اليوم ({logs.length})</div>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setTab('secretaryActivity')}>📊 التقرير الكامل (يومي/أسبوعي/شهري) ←</button>
+      </div>
       <table>
         <thead><tr><th>الوقت</th><th>الحساب</th><th>القسم</th><th>التفاصيل</th></tr></thead>
         <tbody>
-          {logs.map(l=>(
+          {logs.slice(0,8).map(l=>(
             <tr key={l.id}>
               <td className="small muted">{l.at && l.at.toDate ? l.at.toDate().toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'}) : '—'}</td>
               <td className="small">{l.actorEmail}</td>
               <td className="small">{l.collection}</td>
               <td className="small">{l.summary}</td>
             </tr>
+
           ))}
         </tbody>
       </table>
+      {logs.length>8 && <div className="small muted" style={{marginTop:8}}>و{logs.length-8} حركة أخرى اليوم — شوف التقرير الكامل</div>}
+    </div>
+  );
+}
+
+const ACTIVITY_PERIODS = [
+  {id:'today', label:'اليوم', days:0},
+  {id:'week', label:'آخر أسبوع', days:7},
+  {id:'month', label:'آخر شهر', days:30},
+  {id:'4months', label:'آخر 4 شهور', days:120},
+];
+function activityStartKey(days){
+  const d = new Date();
+  d.setDate(d.getDate()-days);
+  return d.toISOString().slice(0,10);
+}
+
+// Full historical audit report for the secretary's activity — every create/edit/delete she
+// ever makes anywhere in the system, kept forever (activityLog docs are never deleted here),
+// viewable as a daily/weekly/monthly/4-month report. Admin-only.
+function SecretaryActivityReportTab(){
+  const [period,setPeriod] = useState('week');
+  const [logs,setLogs] = useState([]);
+  const [loading,setLoading] = useState(true);
+
+  useEffect(()=>{
+    setLoading(true);
+    const p = ACTIVITY_PERIODS.find(x=>x.id===period);
+    const startKey = activityStartKey(p.days);
+    const unsub = db.collection('activityLog').where('dateKey','>=',startKey).onSnapshot(snap=>{
+      const list = snap.docs.map(d=>({id:d.id,...d.data()}));
+      list.sort((a,b)=> (b.at && b.at.toMillis ? b.at.toMillis() : 0) - (a.at && a.at.toMillis ? a.at.toMillis() : 0));
+      setLogs(list);
+      setLoading(false);
+    }, err=>{ console.error(err); setLoading(false); });
+    return unsub;
+  },[period]);
+
+  const totalCreated = logs.reduce((s,l)=>s+(l.created?.length||0),0);
+  const totalUpdated = logs.reduce((s,l)=>s+(l.updated?.length||0),0);
+  const totalDeleted = logs.reduce((s,l)=>s+(l.deleted?.length||0),0);
+  const activeDays = new Set(logs.map(l=>l.dateKey)).size;
+
+  const byCollection = useMemo(()=>{
+    const m = {};
+    logs.forEach(l=>{ m[l.collection] = (m[l.collection]||0) + (l.created?.length||0) + (l.updated?.length||0) + (l.deleted?.length||0); });
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  },[logs]);
+
+  const byDay = useMemo(()=>{
+    const m = {};
+    logs.forEach(l=>{ m[l.dateKey] = (m[l.dateKey]||0) + 1; });
+    return Object.entries(m).sort((a,b)=>b[0].localeCompare(a[0]));
+  },[logs]);
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>نشاط السكرتيرة</h1><div className="date">سجل كامل لكل إضافة وتعديل وحذف — محفوظ بلا نهاية</div></div>
+      </div>
+
+      <div className="chip-row" style={{marginBottom:18}}>
+        {ACTIVITY_PERIODS.map(p=>(
+          <span key={p.id} className={"chip "+(period===p.id?'active':'')} onClick={()=>setPeriod(p.id)}>{p.label}</span>
+        ))}
+      </div>
+
+      <div className="grid grid-4" style={{marginBottom:18}}>
+        <div className="card"><div className="stat-label">إجمالي الحركات</div><div className="stat-value">{logs.length}</div></div>
+        <div className="card"><div className="stat-label">إضافة</div><div className="stat-value" style={{color:'var(--green)'}}>{totalCreated}</div></div>
+        <div className="card"><div className="stat-label">تعديل</div><div className="stat-value" style={{color:'var(--amber)'}}>{totalUpdated}</div></div>
+        <div className="card"><div className="stat-label">حذف</div><div className="stat-value" style={{color:'var(--rose)'}}>{totalDeleted}</div></div>
+      </div>
+
+      <div className="grid grid-2" style={{marginBottom:18}}>
+        <div className="card">
+          <div className="section-title">حسب القسم</div>
+          {byCollection.length===0 ? <div className="muted small">لا يوجد نشاط في هذه الفترة</div> : (
+            <table>
+              <thead><tr><th>القسم</th><th>عدد الحركات</th></tr></thead>
+              <tbody>{byCollection.map(([name,count])=><tr key={name}><td>{name}</td><td style={{fontWeight:800}}>{count}</td></tr>)}</tbody>
+            </table>
+          )}
+        </div>
+        <div className="card">
+          <div className="section-title">حسب اليوم ({activeDays} يوم نشاط)</div>
+          {byDay.length===0 ? <div className="muted small">لا يوجد نشاط في هذه الفترة</div> : (
+            <table>
+              <thead><tr><th>اليوم</th><th>عدد الحركات</th></tr></thead>
+              <tbody>{byDay.map(([date,count])=><tr key={date}><td>{date}</td><td style={{fontWeight:800}}>{count}</td></tr>)}</tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="section-title">السجل التفصيلي ({logs.length})</div>
+        {loading ? <div className="muted small">جارِ التحميل...</div> : logs.length===0 ? <Empty icon="🛡" text="لا يوجد نشاط مسجل في هذه الفترة" /> : (
+          <table>
+            <thead><tr><th>التاريخ</th><th>الوقت</th><th>الحساب</th><th>القسم</th><th>التفاصيل</th></tr></thead>
+            <tbody>
+              {logs.map(l=>(
+                <tr key={l.id}>
+                  <td className="small">{l.dateKey}</td>
+                  <td className="small muted">{l.at && l.at.toDate ? l.at.toDate().toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'}) : '—'}</td>
+                  <td className="small">{l.actorEmail}</td>
+                  <td className="small">{l.collection}</td>
+                  <td className="small">{l.summary}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
@@ -808,7 +1225,7 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
         </div>
       </div>
 
-      {isAdmin && <SecretaryActivityCard />}
+      {isAdmin && <SecretaryActivityCard setTab={setTab} />}
 
       <div className="grid grid-4" style={{marginBottom:18}}>
         <div className="card">
@@ -881,7 +1298,7 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
   );
 }
 
-function StudentsTab({students,groups,persistStudents,payments,currentMonth,groupById,attendance,isAdmin}){
+function StudentsTab({students,groups,persistStudents,payments,currentMonth,groupById,attendance,isAdmin,actorRef}){
   const [query,setQuery] = useState('');
   const [filterGroup,setFilterGroup] = useState('all');
   const [editing,setEditing] = useState(null); // student obj or 'new'
@@ -892,7 +1309,7 @@ function StudentsTab({students,groups,persistStudents,payments,currentMonth,grou
     return matchQ && matchG;
   });
 
-  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',feeOverride:'',joinDate:todayISO(),notes:''});
+  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',feeOverride:'',joinDate:todayISO(),notes:'',status:'active'});
 
   const save = (data) => {
     const {isNew, ...clean} = data;
@@ -904,10 +1321,15 @@ function StudentsTab({students,groups,persistStudents,payments,currentMonth,grou
     }
     setEditing(null);
   };
-  const remove = (id) => {
-    if(confirm('تأكيد حذف الطالب؟ سيتم حذف كل بياناته من الحضور والدرجات والمدفوعات المرتبطة به يدوياً.')){
-      persistStudents(students.filter(s=>s.id!==id));
+  const remove = (student) => {
+    if(confirm(`تأكيد نقل "${student.name}" لسلة المحذوفات؟ تقدر تسترجعه خلال شهرين من تبويب "سلة المحذوفات".`)){
+      removeWithTrash('students', student, students, persistStudents, actorRef.current);
     }
+  };
+  const toggleFreeze = (student) => {
+    const willFreeze = student.status!=='frozen';
+    if(willFreeze && !confirm(`تجميد "${student.name}"؟ هيختفي من كشوف الحضور والدرجات لحد ما تلغي التجميد، وبياناته وتاريخه هيفضلوا محفوظين.`)) return;
+    persistStudents(students.map(s=>s.id===student.id?{...s,status: willFreeze?'frozen':'active'}:s));
   };
 
   const attendanceRate = (studentId) => {
@@ -938,24 +1360,27 @@ function StudentsTab({students,groups,persistStudents,payments,currentMonth,grou
       <div className="card">
         {filtered.length===0 ? <Empty icon="👤" text="لا يوجد طلاب مطابقين — أضف طالب جديد من الأعلى" /> : (
           <table>
-            <thead><tr><th>الطالب</th><th>المجموعة</th><th>المستوى</th><th>هاتف ولي الأمر</th><th>نسبة الحضور</th><th>سداد {monthLabel(currentMonth)}</th><th></th></tr></thead>
+            <thead><tr><th>الطالب</th><th>المجموعة</th><th>المستوى</th><th>هاتف ولي الأمر</th><th>نسبة الحضور</th><th>سداد {monthLabel(currentMonth)}</th><th>الحالة</th><th></th></tr></thead>
             <tbody>
               {filtered.map(s=>{
                 const g = groupById(s.groupId);
                 const rate = attendanceRate(s.id);
                 const paid = payments.some(p=>p.studentId===s.id && p.month===currentMonth && p.paid);
+                const frozen = s.status==='frozen';
                 return (
-                  <tr key={s.id}>
+                  <tr key={s.id} style={frozen?{opacity:0.6}:{}}>
                     <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
                     <td>{g?g.name:<span className="muted">بدون مجموعة</span>}</td>
                     <td>{s.stage}</td>
                     <td>{s.parentPhone||'—'}</td>
                     <td>{rate===null?<span className="muted">—</span>:<span className={"badge "+(rate>=80?'badge-green':rate>=50?'badge-amber':'badge-rose')}>{rate}%</span>}</td>
                     <td>{paid?<span className="badge badge-green">تم السداد</span>:<span className="badge badge-rose">متأخر</span>}</td>
+                    <td>{frozen?<span className="badge badge-gray">🧊 مجمّد</span>:<span className="badge badge-green">نشط</span>}</td>
                     <td>
-                      <div style={{display:'flex',gap:6}}>
+                      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                         <button className="btn btn-ghost btn-sm" onClick={()=>setEditing(s)}>تعديل</button>
-                        {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(s.id)}>حذف</button>}
+                        <button className="btn btn-ghost btn-sm" onClick={()=>toggleFreeze(s)}>{frozen?'▶ إلغاء التجميد':'🧊 تجميد'}</button>
+                        {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(s)}>حذف</button>}
                       </div>
                     </td>
                   </tr>
@@ -1037,7 +1462,7 @@ function StudentForm({student,groups,onCancel,onSave}){
   );
 }
 
-function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin}){
+function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin,actorRef}){
   const [editingGroup,setEditingGroup] = useState(null);
   const [editingTeacher,setEditingTeacher] = useState(null);
 
@@ -1046,14 +1471,14 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
     else persistGroups([...groups,{...data,id:uid()}]);
     setEditingGroup(null);
   };
-  const removeGroup = (id) => { if(confirm('تأكيد حذف المجموعة؟')) persistGroups(groups.filter(g=>g.id!==id)); };
+  const removeGroup = (g) => { if(confirm('تأكيد نقل المجموعة لسلة المحذوفات؟')) removeWithTrash('groups', g, groups, persistGroups, actorRef.current); };
 
   const saveTeacher = (data) => {
     if(data.id) persistTeachers(teachers.map(t=>t.id===data.id?data:t));
     else persistTeachers([...teachers,{...data,id:uid()}]);
     setEditingTeacher(null);
   };
-  const removeTeacher = (id) => { if(confirm('تأكيد حذف المدرس؟')) persistTeachers(teachers.filter(t=>t.id!==id)); };
+  const removeTeacher = (t) => { if(confirm('تأكيد نقل المدرس لسلة المحذوفات؟')) removeWithTrash('teachers', t, teachers, persistTeachers, actorRef.current); };
 
   return (
     <div>
@@ -1090,7 +1515,7 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
                 {isAdmin && (
                   <div style={{display:'flex',gap:6,marginTop:12}}>
                     <button className="btn btn-ghost btn-sm" onClick={()=>setEditingGroup(g)}>تعديل</button>
-                    <button className="btn btn-danger btn-sm" onClick={()=>removeGroup(g.id)}>حذف</button>
+                    <button className="btn btn-danger btn-sm" onClick={()=>removeGroup(g)}>حذف</button>
                   </div>
                 )}
               </div>
@@ -1113,7 +1538,7 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
                   {isAdmin && (
                     <div style={{display:'flex',gap:6}}>
                       <button className="btn btn-ghost btn-sm" onClick={()=>setEditingTeacher(t)}>تعديل</button>
-                      <button className="btn btn-danger btn-sm" onClick={()=>removeTeacher(t.id)}>حذف</button>
+                      <button className="btn btn-danger btn-sm" onClick={()=>removeTeacher(t)}>حذف</button>
                     </div>
                   )}
                 </td>
@@ -1192,6 +1617,8 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
   const [date,setDate] = useState(todayISO());
   const [showHistory,setShowHistory] = useState(false);
+  const [autoSaved,setAutoSaved] = useState(false);
+  const dirtyRef = React.useRef(false);
 
   useEffect(()=>{ if(!groupId && groups[0]) setGroupId(groups[0].id); },[groups]);
 
@@ -1202,19 +1629,38 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   useEffect(()=>{
     const ex = attendance.find(a=>a.groupId===groupId && a.date===date);
     setRecords(ex?{...ex.records}:{});
-  },[groupId,date,attendance]);
+    dirtyRef.current = false;
+  },[groupId,date]);
+
+  // Auto-save (debounced): every toggle writes to Firestore within ~1s, instead of waiting
+  // for a manual "save" click — so a power cut mid-session can't wipe out an unsaved roster.
+  useEffect(()=>{
+    if(!dirtyRef.current) return;
+    const t = setTimeout(()=>{
+      const rec = {id: existing?existing.id:uid(), groupId, date, records};
+      const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date));
+      persistAttendance([...others, rec]);
+      dirtyRef.current = false;
+      setAutoSaved(true);
+      setTimeout(()=>setAutoSaved(false), 2000);
+    }, 900);
+    return ()=>clearTimeout(t);
+  },[records]);
 
   const toggle = (sid) => {
     setRecords(r=>({...r, [sid]: r[sid]==='present' ? 'absent' : 'present'}));
+    dirtyRef.current = true;
   };
   const markAll = (status) => {
     const r = {}; roster.forEach(s=>r[s.id]=status); setRecords(r);
+    dirtyRef.current = true;
   };
 
   const save = () => {
     const rec = {id: existing?existing.id:uid(), groupId, date, records};
     const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date));
     persistAttendance([...others, rec]);
+    dirtyRef.current = false;
     alert('تم حفظ الحضور بنجاح');
   };
 
@@ -1223,7 +1669,8 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   return (
     <div>
       <div className="topbar">
-        <div><h1>الحضور والغياب</h1><div className="date">سجّل حضور المجموعة في ثوانٍ</div></div>
+        <div><h1>الحضور والغياب</h1><div className="date">سجّل حضور المجموعة في ثوانٍ — بيتحفظ أوتوماتيك مع كل ضغطة</div></div>
+        {autoSaved && <span className="badge badge-green">✓ اتحفظ أوتوماتيك</span>}
       </div>
 
       <div className="toolbar">
@@ -1374,12 +1821,19 @@ function ExamForm({exam,roster,onCancel,onSave}){
   );
 }
 
-function PaymentsTab({students,groups,payments,persistPayments,groupById,setReceiptData,isAdmin}){
+function PaymentsTab({students,groups,payments,persistPayments,groupById,setReceiptData,isAdmin,refunds,persistRefunds,actorRef}){
   const [month,setMonth] = useState(monthKey());
   const [filterGroup,setFilterGroup] = useState('all');
   const [onlyOverdue,setOnlyOverdue] = useState(false);
+  const [query,setQuery] = useState('');
+  const [refunding,setRefunding] = useState(null); // student obj or null
 
-  const list = students.filter(s=>filterGroup==='all'||s.groupId===filterGroup);
+  const list = students.filter(s=>{
+    const matchG = filterGroup==='all'||s.groupId===filterGroup;
+    const q = query.trim().toLowerCase();
+    const matchQ = !q || s.name.toLowerCase().includes(q) || studentCode(s.id).toLowerCase().includes(q) || (s.phone||'').includes(q);
+    return matchG && matchQ;
+  });
 
   const recordFor = (sid) => payments.find(p=>p.studentId===sid && p.month===month);
 
@@ -1415,6 +1869,12 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
     });
   };
 
+  const saveRefund = (data) => {
+    const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
+    persistRefunds([...refunds, {id:uid(), studentId:refunding.id, amount:Number(data.amount)||0, reason:data.reason, date:todayISO(), recordedAt:new Date().toISOString(), recordedBy:recipientLabel}]);
+    setRefunding(null);
+  };
+
   const visibleList = list.filter(s=>{
     if(!onlyOverdue) return true;
     const r = recordFor(s.id);
@@ -1423,6 +1883,7 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
 
   const totalCollected = list.reduce((sum,s)=>{ const r=recordFor(s.id); return sum + (r&&r.paid?Number(r.amount)||0:0); },0);
   const totalExpected = list.reduce((sum,s)=>{ const g=groupById(s.groupId); return sum + studentFee(s,g); },0);
+  const monthRefunds = refunds.filter(r=>r.date && r.date.startsWith(month)).sort((a,b)=>b.date.localeCompare(a.date));
 
   return (
     <div>
@@ -1437,6 +1898,7 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
       </div>
 
       <div className="toolbar">
+        <input className="search" placeholder="دوّر بالكود أو الاسم..." value={query} onChange={e=>setQuery(e.target.value)} />
         <input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} />
         <select style={{maxWidth:220}} value={filterGroup} onChange={e=>setFilterGroup(e.target.value)}>
           <option value="all">كل المجموعات</option>
@@ -1445,7 +1907,7 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
         <span className={"chip "+(onlyOverdue?'active':'')} onClick={()=>setOnlyOverdue(!onlyOverdue)}>عرض المتأخرين فقط</span>
       </div>
 
-      <div className="card">
+      <div className="card" style={{marginBottom:18}}>
         {visibleList.length===0 ? <Empty icon="৳" text="لا يوجد طلاب مطابقين" /> : (
           <table>
             <thead><tr><th>الطالب</th><th>المجموعة</th><th>القسط</th><th>الحالة</th><th>تاريخ السداد</th><th></th></tr></thead>
@@ -1462,9 +1924,10 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
                     <td>{paid?<span className="badge badge-green">تم السداد</span>:<span className="badge badge-rose">متأخر</span>}</td>
                     <td className="small muted">{paid && r.paidDate ? r.paidDate : '—'}</td>
                     <td>
-                      <div style={{display:'flex',gap:6}}>
+                      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                         {(!paid || isAdmin) && <button className={"btn btn-sm "+(paid?'btn-ghost':'btn-primary')} onClick={()=>togglePaid(s)}>{paid?'إلغاء السداد':'تسجيل سداد'}</button>}
                         {paid && <button className="btn btn-ghost btn-sm" onClick={()=>printReceipt(s)}>🖶 إيصال</button>}
+                        <button className="btn btn-ghost btn-sm" onClick={()=>setRefunding(s)}>↩ استرداد أموال</button>
                       </div>
                     </td>
                   </tr>
@@ -1473,6 +1936,50 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
             </tbody>
           </table>
         )}
+      </div>
+
+      <div className="card">
+        <div className="section-title">عمليات الاسترداد — {monthLabel(month)} ({monthRefunds.length})</div>
+        {monthRefunds.length===0 ? <div className="muted small">لا توجد عمليات استرداد هذا الشهر</div> : (
+          <table>
+            <thead><tr><th>الطالب</th><th>المبلغ</th><th>السبب</th><th>التاريخ</th><th>بواسطة</th></tr></thead>
+            <tbody>
+              {monthRefunds.map(r=>{
+                const st = students.find(s=>s.id===r.studentId);
+                return (
+                  <tr key={r.id}>
+                    <td>{st?st.name:'—'}</td>
+                    <td style={{color:'var(--rose)',fontWeight:800}}>−{fmtMoney(r.amount)}</td>
+                    <td className="small muted">{r.reason||'—'}</td>
+                    <td className="small muted">{r.date}</td>
+                    <td className="small muted">{r.recordedBy}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {refunding && (
+        <Modal title={`استرداد أموال — ${refunding.name}`} onClose={()=>setRefunding(null)}>
+          <RefundForm onCancel={()=>setRefunding(null)} onSave={saveRefund} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function RefundForm({onCancel,onSave}){
+  const [amount,setAmount] = useState('');
+  const [reason,setReason] = useState('');
+  return (
+    <div>
+      <Field label="المبلغ المسترد (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" /></Field>
+      <Field label="السبب"><input value={reason} onChange={e=>setReason(e.target.value)} placeholder="مثال: انسحاب من المجموعة، خصم زيادة..." /></Field>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ if(!amount || Number(amount)<=0){alert('أدخل مبلغ صحيح');return;} onSave({amount,reason}); }}>تسجيل الاسترداد</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
       </div>
     </div>
   );
@@ -1507,7 +2014,7 @@ function ReceiptOverlay({data,onClose}){
   );
 }
 
-function PrivateLessonsTab({teachers,privateLessons,persistPrivateLessons,isAdmin}){
+function PrivateLessonsTab({teachers,privateLessons,persistPrivateLessons,isAdmin,actorRef}){
   const [creating,setCreating] = useState(null);
 
   const openNew = () => setCreating({id:null, studentName:'', phone:'', teacherId:teachers[0]?teachers[0].id:'', totalSessions:8, pricePerPackage:'', usedSessions:0, purchaseDate:todayISO(), sessionDates:[]});
@@ -1517,7 +2024,7 @@ function PrivateLessonsTab({teachers,privateLessons,persistPrivateLessons,isAdmi
     else persistPrivateLessons([...privateLessons,{...data,id:uid()}]);
     setCreating(null);
   };
-  const remove = (id) => { if(confirm('حذف هذه الباقة نهائيًا؟')) persistPrivateLessons(privateLessons.filter(p=>p.id!==id)); };
+  const remove = (pkg) => { if(confirm('نقل هذه الباقة لسلة المحذوفات؟')) removeWithTrash('privateLessons', pkg, privateLessons, persistPrivateLessons, actorRef.current); };
 
   const logSession = (pkg) => {
     if(pkg.usedSessions>=pkg.totalSessions) return;
@@ -1561,7 +2068,7 @@ function PrivateLessonsTab({teachers,privateLessons,persistPrivateLessons,isAdmi
                 <div style={{display:'flex',gap:6,marginTop:12,flexWrap:'wrap'}}>
                   <button className="btn btn-primary btn-sm" onClick={()=>logSession(pkg)} disabled={finished}>✓ تسجيل حصة</button>
                   {pkg.usedSessions>0 && <button className="btn btn-ghost btn-sm" onClick={()=>undoSession(pkg)}>تراجع عن آخر حصة</button>}
-                  {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(pkg.id)}>حذف</button>}
+                  {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(pkg)}>حذف</button>}
                 </div>
               </div>
             );
@@ -2248,11 +2755,87 @@ function CenterScheduleWidget(){
   );
 }
 
-function AccountingTab({teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth}){
-  const [view,setView] = useState('expenses'); // expenses | shares | daily
+const TRASH_COLLECTION_LABELS = {
+  students:'طالب', groups:'مجموعة', teachers:'مدرس', privateLessons:'باقة دروس خصوصية'
+};
+
+// Restores or permanently deletes items that were moved to trash (see removeWithTrash).
+// Visible to both admin and secretary so either can recover an accidental deletion;
+// permanent purge of expired items is admin-only.
+function TrashTab({isAdmin}){
+  const [items,setItems] = useState([]);
+  useEffect(()=>{
+    const unsub = db.collection('trash').onSnapshot(snap=>{
+      setItems(snap.docs.map(d=>({id:d.id,...d.data()})));
+    }, err=>console.error(err));
+    return unsub;
+  },[]);
+
+  const now = Date.now();
+  const active = items.filter(it=>!it.expiresAtMs || it.expiresAtMs > now).sort((a,b)=>(b.expiresAtMs||0)-(a.expiresAtMs||0));
+  const expired = items.filter(it=>it.expiresAtMs && it.expiresAtMs <= now);
+
+  const restore = async (item) => {
+    if(!confirm(`استرجاع "${item.data?.name || item.data?.studentName || TRASH_COLLECTION_LABELS[item.collection] || item.collection}"؟`)) return;
+    try{
+      const {id, ...rest} = item.data;
+      await db.collection(item.collection).doc(id).set(rest);
+      await db.collection('trash').doc(item.id).delete();
+    }catch(err){ console.error(err); alert('حصل خطأ أثناء الاسترجاع: '+(err.message||'')); }
+  };
+  const purgeOne = async (item) => {
+    if(!confirm('حذف نهائي — مش هينفع يترجع تاني. متأكد؟')) return;
+    try{ await db.collection('trash').doc(item.id).delete(); }
+    catch(err){ console.error(err); alert('حصل خطأ: '+(err.message||'')); }
+  };
+  const purgeExpired = async () => {
+    if(expired.length===0) return;
+    if(!confirm(`حذف ${expired.length} عنصر منتهي الصلاحية نهائيًا؟`)) return;
+    for(const it of expired){ await db.collection('trash').doc(it.id).delete().catch(()=>{}); }
+  };
+
+  const daysLeft = (it) => it.expiresAtMs ? Math.max(0, Math.ceil((it.expiresAtMs-now)/(24*60*60*1000))) : null;
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>سلة المحذوفات</h1><div className="date">أي حاجة اتحذفت (طالب، مجموعة، مدرس، باقة) بتفضل هنا شهرين قبل ما تتشال نهائي</div></div>
+        {isAdmin && expired.length>0 && <button className="btn btn-danger btn-sm" onClick={purgeExpired}>🗑 حذف {expired.length} منتهي الصلاحية نهائيًا</button>}
+      </div>
+
+      <div className="card">
+        {active.length===0 ? <Empty icon="🗑" text="سلة المحذوفات فاضية دلوقتي" /> : (
+          <table>
+            <thead><tr><th>النوع</th><th>الاسم</th><th>حذفه</th><th>متبقي قبل الحذف النهائي</th><th></th></tr></thead>
+            <tbody>
+              {active.map(it=>(
+                <tr key={it.id}>
+                  <td>{TRASH_COLLECTION_LABELS[it.collection]||it.collection}</td>
+                  <td>{it.data?.name || it.data?.studentName || '—'}</td>
+                  <td className="small muted">{it.deletedBy} ({it.deletedByRole==='admin'?'مدير النظام':'سكرتيرة'})</td>
+                  <td className="small">{daysLeft(it)} يوم</td>
+                  <td>
+                    <div style={{display:'flex',gap:6}}>
+                      <button className="btn btn-primary btn-sm" onClick={()=>restore(it)}>↩ استرجاع</button>
+                      {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>purgeOne(it)}>حذف نهائي</button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AccountingTab({teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}){
+  const [view,setView] = useState('expenses'); // expenses | shares | daily | treasury
   const [month,setMonth] = useState(currentMonth);
   const [day,setDay] = useState(todayISO());
   const [creating,setCreating] = useState(null);
+  const [payingOut,setPayingOut] = useState(null); // teacher obj or null
 
   const EXPENSE_CATEGORIES = ['إيجار','فواتير (كهرباء/مياه/إنترنت)','رواتب','صيانة وتجهيزات','دعاية وتسويق','مذكرات ومواد تعليمية','أخرى'];
 
@@ -2261,6 +2844,17 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
   const sharedExpenses = monthExpenses.filter(e=>!e.owner || e.owner==='academy');
   const totalSharedExpenses = sharedExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
   const monthRevenue = payments.filter(p=>p.month===month && p.paid).reduce((s,p)=>s+(Number(p.amount)||0),0);
+  const monthRefundsList = (refunds||[]).filter(r=>r.date && r.date.startsWith(month));
+  const totalRefunds = monthRefundsList.reduce((s,r)=>s+(Number(r.amount)||0),0);
+  const monthPayoutsList = (teacherPayouts||[]).filter(p=>p.date && p.date.startsWith(month));
+  const totalPayouts = monthPayoutsList.reduce((s,p)=>s+(Number(p.amount)||0),0);
+  const treasuryNet = monthRevenue - totalRefunds - totalPayouts - totalExpenses;
+
+  const savePayout = (data) => {
+    const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
+    persistTeacherPayouts([...teacherPayouts, {id:uid(), teacherId:payingOut.id, amount:Number(data.amount)||0, note:data.note, date:todayISO(), recordedBy:recipientLabel}]);
+    setPayingOut(null);
+  };
 
   const groupRevenue = (t) => {
     const myGroups = groups.filter(g=>g.teacherId===t.id);
@@ -2325,6 +2919,7 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
         <span className={"chip "+(view==='expenses'?'active':'')} onClick={()=>setView('expenses')}>مصروفات تشغيلية</span>
         <span className={"chip "+(view==='shares'?'active':'')} onClick={()=>setView('shares')}>نسب المدرسين وصافي الربح</span>
         <span className={"chip "+(view==='daily'?'active':'')} onClick={()=>setView('daily')}>تقرير يومي مفصل</span>
+        <span className={"chip "+(view==='treasury'?'active':'')} onClick={()=>setView('treasury')}>💰 تقرير الخزينة</span>
       </div>
 
       {view==='expenses' && (
@@ -2367,16 +2962,21 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
           <div className="card" style={{marginBottom:18}}>
             <div className="section-title">مدرسين نظام النسبة — {monthLabel(month)}</div>
             <table>
-              <thead><tr><th>المدرس</th><th>إيرادات مجموعاته</th><th>نسبته</th><th>نصيبه (يُصرف له)</th><th>نصيب الأكاديمية</th></tr></thead>
+              <thead><tr><th>المدرس</th><th>إيرادات مجموعاته</th><th>نسبته</th><th>نصيبه (يُصرف له)</th><th>نصيب الأكاديمية</th><th>اتصرفله الشهر ده</th><th></th></tr></thead>
               <tbody>
-                {teacherShares.map(t=>(
+                {teacherShares.map(t=>{
+                  const paidToThisTeacher = monthPayoutsList.filter(p=>p.teacherId===t.teacher.id).reduce((s,p)=>s+(Number(p.amount)||0),0);
+                  return (
                   <tr key={t.teacher.id}>
                     <td>{t.teacher.name}</td><td>{fmtMoney(t.revenue)}</td><td>{t.pct}%</td>
                     <td style={{fontWeight:800}}>{fmtMoney(t.share)}</td>
                     <td className="small muted">{fmtMoney(t.academyCut)}</td>
+                    <td className="small" style={{color:'var(--green)',fontWeight:800}}>{fmtMoney(paidToThisTeacher)}</td>
+                    <td><button className="btn btn-ghost btn-sm" onClick={()=>setPayingOut(t.teacher)}>💰 تسجيل صرف</button></td>
                   </tr>
-                ))}
-                {teacherShares.length===0 && <tr><td colSpan="5" className="muted small" style={{textAlign:'center',padding:14}}>لا يوجد مدرسين على نظام النسبة</td></tr>}
+                  );
+                })}
+                {teacherShares.length===0 && <tr><td colSpan="7" className="muted small" style={{textAlign:'center',padding:14}}>لا يوجد مدرسين على نظام النسبة</td></tr>}
               </tbody>
             </table>
           </div>
@@ -2426,11 +3026,84 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
         </div>
       )}
 
+      {view==='treasury' && (
+        <div>
+          <div className="toolbar"><input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} /></div>
+
+          <div className="card" style={{marginBottom:18, borderColor:'var(--charcoal)'}}>
+            <div className="section-title">صافي الموجود في الدرج — {monthLabel(month)}</div>
+            <table>
+              <tbody>
+                <tr><td>الإيراد المحصّل</td><td style={{fontWeight:800,color:'var(--green)'}}>+{fmtMoney(monthRevenue)}</td></tr>
+                <tr><td>المبالغ المستردة</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalRefunds)}</td></tr>
+                <tr><td>مستحقات مصروفة للمدرسين</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalPayouts)}</td></tr>
+                <tr><td>المصروفات (كل الأنواع)</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalExpenses)}</td></tr>
+              </tbody>
+            </table>
+            <div style={{marginTop:14,paddingTop:14,borderTop:'2px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{fontWeight:900,fontSize:15}}>= الإجمالي الموجود فعليًا في الدرج</div>
+              <div style={{fontWeight:900,fontSize:22,color:treasuryNet>=0?'var(--green)':'var(--rose)'}}>{fmtMoney(treasuryNet)}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-2" style={{marginBottom:18}}>
+            <div className="card">
+              <div className="section-title">عمليات الاسترداد — {monthLabel(month)} ({monthRefundsList.length})</div>
+              {monthRefundsList.length===0 ? <div className="muted small">لا يوجد</div> : (
+                <table>
+                  <thead><tr><th>الطالب</th><th>المبلغ</th><th>التاريخ</th></tr></thead>
+                  <tbody>
+                    {monthRefundsList.map(r=>{
+                      const st = students.find(s=>s.id===r.studentId);
+                      return <tr key={r.id}><td>{st?st.name:'—'}</td><td style={{color:'var(--rose)'}}>−{fmtMoney(r.amount)}</td><td className="small muted">{r.date}</td></tr>;
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="card">
+              <div className="section-title">مستحقات مصروفة للمدرسين — {monthLabel(month)} ({monthPayoutsList.length})</div>
+              {monthPayoutsList.length===0 ? <div className="muted small">لا يوجد</div> : (
+                <table>
+                  <thead><tr><th>المدرس</th><th>المبلغ</th><th>التاريخ</th></tr></thead>
+                  <tbody>
+                    {monthPayoutsList.map(p=>{
+                      const t = teachers.find(x=>x.id===p.teacherId);
+                      return <tr key={p.id}><td>{t?t.name:'—'}</td><td style={{color:'var(--rose)'}}>−{fmtMoney(p.amount)}</td><td className="small muted">{p.date}</td></tr>;
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {creating && (
         <Modal title="مصروف جديد" onClose={()=>setCreating(null)}>
           <ExpenseForm expense={creating} categories={EXPENSE_CATEGORIES} teachers={teachers} onCancel={()=>setCreating(null)} onSave={saveExpense} />
         </Modal>
       )}
+      {payingOut && (
+        <Modal title={`تسجيل صرف مستحق — ${payingOut.name}`} onClose={()=>setPayingOut(null)}>
+          <PayoutForm onCancel={()=>setPayingOut(null)} onSave={savePayout} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function PayoutForm({onCancel,onSave}){
+  const [amount,setAmount] = useState('');
+  const [note,setNote] = useState('');
+  return (
+    <div>
+      <Field label="المبلغ المصروف (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" /></Field>
+      <Field label="ملاحظة (اختياري)"><input value={note} onChange={e=>setNote(e.target.value)} placeholder="مثال: مستحقات شهر يناير" /></Field>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ if(!amount || Number(amount)<=0){alert('أدخل مبلغ صحيح');return;} onSave({amount,note}); }}>تسجيل الصرف</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+      </div>
     </div>
   );
 }
