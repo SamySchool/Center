@@ -333,6 +333,30 @@ const SCHEDULE_OWNER_NAME_EN = "Mr. Mohamed Samy";
 
 const COLLECTIONS = ['teachers','groups','students','attendance','grades','payments','expenses','privateLessons','refunds','teacherPayouts'];
 
+// Attendance is the one collection that grows every day forever (one doc per group per
+// session), so only a rolling window stays live-synced in memory — plenty for daily
+// operations (today's roster, this month's rate, recent history, overdue/absentee alerts).
+// Older data still exists in Firestore untouched; it's just fetched on-demand (see below)
+// instead of being kept live forever.
+const ATTENDANCE_SYNC_DAYS = 180;
+function attendanceSyncCutoff(){
+  const d = new Date();
+  d.setDate(d.getDate() - ATTENDANCE_SYNC_DAYS);
+  return d.toISOString().slice(0,10);
+}
+// One-time (non-live) fetch for attendance older than the sync window — used by reports
+// that need a specific month which may have already rolled out of live memory (e.g. a
+// parent asking for last September's report in March). Merged in locally by the caller,
+// never written into global state, so it never grows the app's permanent memory footprint.
+async function fetchAttendanceRange(groupId, monthPrefix){
+  const snap = await db.collection('attendance')
+    .where('groupId','==',groupId)
+    .where('date','>=', monthPrefix+'-01')
+    .where('date','<=', monthPrefix+'-31')
+    .get();
+  return snap.docs.map(d=>({id:d.id, ...d.data()}));
+}
+
 // Diffs newArray against the last-known state for a collection and writes only
 // the changed/added/removed documents to Firestore, so history-heavy
 // collections (attendance, payments) do not get fully rewritten on every save.
@@ -662,7 +686,88 @@ function QuickAttendancePanel({students,groupById,attendance,persistAttendance,o
   );
 }
 
-function GlobalHeader({isAdmin}){
+// Auto-queued notifications: instead of Meta's paid WhatsApp Business API, we prepare the
+// exact message + link the moment a triggering event happens (payment recorded, new student
+// registered), and surface it in the bell icon in the header — one tap to actually send it.
+// Zero recurring cost, and "automatic" up to the point WhatsApp legally requires a human tap.
+function buildAutoNotificationText(type, student, context){
+  if(type==='payment'){
+    return [
+      `مرحبًا 🌟 نأكد استلام دفعة الابن/ة *${student.name}* بمبلغ ${fmtMoney(context.amount)} لشهر ${monthLabel(context.month)}.`,
+      `رقم الإيصال: #${context.receiptNo}`,
+      ``, `شكرًا لثقتكم 🙏 — SamySchool`
+    ].join('\n');
+  }
+  if(type==='registration'){
+    return [
+      `مرحبًا بكم في SamySchool 🌟`,
+      `تم تسجيل الابن/ة *${student.name}* بنجاح${context.groupName?` في مجموعة *${context.groupName}*`:''}.`,
+      `كود الطالب: ${studentCode(student.id)}`,
+      ``, `أهلًا بيكم معنا 🌱`
+    ].join('\n');
+  }
+  return '';
+}
+async function queueAutoNotification(type, student, context){
+  if(!student.parentPhone) return; // nothing to notify without a parent number
+  try{
+    await db.collection('notificationQueue').add({
+      studentId: student.id, type, context,
+      status:'pending', createdAt: new Date().toISOString(),
+      createdAtTs: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+  }catch(err){ console.error('queueAutoNotification failed', err); }
+}
+
+function NotificationBell({students}){
+  const [items,setItems] = useState([]);
+  const [open,setOpen] = useState(false);
+  useEffect(()=>{
+    const unsub = db.collection('notificationQueue').where('status','==','pending').onSnapshot(snap=>{
+      const list = snap.docs.map(d=>({id:d.id,...d.data()}));
+      list.sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+      setItems(list);
+    }, err=>console.error(err));
+    return unsub;
+  },[]);
+
+  const send = (item) => {
+    const student = students.find(s=>s.id===item.studentId);
+    if(!student){ dismiss(item,'sent'); return; }
+    const phone = normalizeEgyptPhone(student.parentPhone);
+    const text = buildAutoNotificationText(item.type, student, item.context||{});
+    if(phone && text) window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank');
+    dismiss(item,'sent');
+  };
+  const dismiss = (item, status) => {
+    db.collection('notificationQueue').doc(item.id).update({status: status||'dismissed', resolvedAt:new Date().toISOString()}).catch(()=>{});
+  };
+
+  return (
+    <div style={{position:'relative'}}>
+      <button className="btn btn-ghost btn-sm" onClick={()=>setOpen(!open)}>🔔 إشعارات جاهزة{items.length>0?` (${items.length})`:''}</button>
+      {open && (
+        <div className="card" style={{position:'absolute',left:0,top:'110%',width:320,maxHeight:400,overflow:'auto',zIndex:80,boxShadow:'0 12px 30px rgba(0,0,0,.25)'}}>
+          {items.length===0 ? <div className="small muted">مفيش إشعارات معلّقة دلوقتي</div> : items.map(item=>{
+            const student = students.find(s=>s.id===item.studentId);
+            return (
+              <div key={item.id} style={{borderBottom:'1px solid var(--border)',paddingBottom:10,marginBottom:10}}>
+                <div style={{fontWeight:800,fontSize:12.5}}>{student?student.name:'—'}</div>
+                <div className="small muted" style={{margin:'4px 0'}}>{item.type==='payment'?'تأكيد سداد':'تأكيد تسجيل'}</div>
+                <div style={{display:'flex',gap:6}}>
+                  <button className="btn btn-primary btn-sm" onClick={()=>send(item)}>📤 إرسال الآن</button>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>dismiss(item,'dismissed')}>تجاهل</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GlobalHeader({isAdmin,students}){
   const [now,setNow] = useState(new Date());
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t); },[]);
   const [centerEvents,setCenterEvents] = useState([]);
@@ -692,7 +797,7 @@ function GlobalHeader({isAdmin}){
         <div className="ahc-time-big">{timeStr}</div>
         <div className="ahc-date">{dayStr} · {dateStr}</div>
       </div>
-      <div className="app-header-side"></div>
+      <div className="app-header-side" style={{justifyContent:'flex-end'}}><NotificationBell students={students} /></div>
     </div>
   );
 }
@@ -744,6 +849,14 @@ function App(){
   },[]);
 
   // Live Firestore sync, only once signed in with a known role
+  //
+  // Every collection here except "attendance" is naturally small and bounded (roughly one
+  // doc per student/group/exam/payment-month), so a full live sync is cheap even at a few
+  // hundred students. Attendance is the one collection that grows every single day forever
+  // (one doc per group per session), so instead of syncing its entire history into memory
+  // on every page load, we only keep a rolling window live (see ATTENDANCE_SYNC_DAYS below).
+  // Anything older is fetched on-demand, one time, only when a report actually needs it
+  // (see fetchAttendanceRange), so it never balloons the app's live memory/read footprint.
   useEffect(()=>{
     if(!user || !role) return;
     // "expenses" and "teacherPayouts" are admin-only by design (see Firestore rules) -
@@ -752,8 +865,11 @@ function App(){
     let pending = activeCollections.length;
     const settle = () => { if(pending>0){ pending--; if(pending===0) setDataLoaded(true); } };
     const setters = {teachers:setTeachers, groups:setGroups, students:setStudents, attendance:setAttendance, grades:setGrades, payments:setPayments, expenses:setExpenses, privateLessons:setPrivateLessons, refunds:setRefunds, teacherPayouts:setTeacherPayouts};
+    const queryFor = (name) => name==='attendance'
+      ? db.collection('attendance').where('date','>=',attendanceSyncCutoff())
+      : db.collection(name);
     const unsubs = activeCollections.map(name=>
-      db.collection(name).onSnapshot(snap=>{
+      queryFor(name).onSnapshot(snap=>{
         setters[name](snap.docs.map(d=>({id:d.id, ...d.data()})));
         settle();
       }, err=>{
@@ -961,7 +1077,7 @@ function App(){
   return (
     <React.Fragment>
     <div className={receiptData?"no-print":""}>
-      <GlobalHeader isAdmin={isAdmin} />
+      <GlobalHeader isAdmin={isAdmin} students={students} />
       <QuickActionsBar {...{students,groups,payments,persistPayments,grades,persistGrades,attendance,persistAttendance,persistStudents,groupById,studentsInGroup,setReceiptData,isAdmin,actorRef}} />
       <div className="app">
       <div className="sidebar no-print">
@@ -1318,6 +1434,8 @@ function StudentsTab({students,groups,persistStudents,payments,currentMonth,grou
       persistStudents(students.map(s=>s.id===clean.id?clean:s));
     }else{
       persistStudents([...students, clean]);
+      const g = groups.find(x=>x.id===clean.groupId);
+      queueAutoNotification('registration', clean, {groupName: g?g.name:''});
     }
     setEditing(null);
   };
@@ -1618,6 +1736,7 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   const [date,setDate] = useState(todayISO());
   const [showHistory,setShowHistory] = useState(false);
   const [autoSaved,setAutoSaved] = useState(false);
+  const [docId,setDocId] = useState(null); // Firestore doc id for this group+date, once resolved
   const dirtyRef = React.useRef(false);
 
   useEffect(()=>{ if(!groupId && groups[0]) setGroupId(groups[0].id); },[groups]);
@@ -1626,20 +1745,38 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   const existing = attendance.find(a=>a.groupId===groupId && a.date===date);
   const [records,setRecords] = useState(existing?existing.records:{});
 
+  // For dates inside the live sync window, the record (if any) is already in `attendance`.
+  // For older, backdated entries the record may exist in Firestore but outside our live
+  // window (see ATTENDANCE_SYNC_DAYS) — so we check on-demand instead of risking a duplicate
+  // doc for the same group+date.
   useEffect(()=>{
-    const ex = attendance.find(a=>a.groupId===groupId && a.date===date);
-    setRecords(ex?{...ex.records}:{});
     dirtyRef.current = false;
+    const ex = attendance.find(a=>a.groupId===groupId && a.date===date);
+    if(ex){ setRecords({...ex.records}); setDocId(ex.id); return; }
+    if(!groupId){ setRecords({}); setDocId(null); return; }
+    if(date < attendanceSyncCutoff()){
+      setRecords({}); setDocId(undefined); // undefined = still checking
+      db.collection('attendance').where('groupId','==',groupId).where('date','==',date).limit(1).get()
+        .then(snap=>{
+          if(!snap.empty){ const d=snap.docs[0]; setRecords({...d.data().records}); setDocId(d.id); }
+          else setDocId(null);
+        })
+        .catch(()=>setDocId(null));
+    }else{
+      setRecords({}); setDocId(null);
+    }
   },[groupId,date]);
 
   // Auto-save (debounced): every toggle writes to Firestore within ~1s, instead of waiting
   // for a manual "save" click — so a power cut mid-session can't wipe out an unsaved roster.
   useEffect(()=>{
     if(!dirtyRef.current) return;
+    if(docId===undefined) return; // still resolving whether an older doc already exists
     const t = setTimeout(()=>{
-      const rec = {id: existing?existing.id:uid(), groupId, date, records};
+      const rec = {id: docId||uid(), groupId, date, records};
       const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date));
       persistAttendance([...others, rec]);
+      if(!docId) setDocId(rec.id);
       dirtyRef.current = false;
       setAutoSaved(true);
       setTimeout(()=>setAutoSaved(false), 2000);
@@ -1657,9 +1794,11 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   };
 
   const save = () => {
-    const rec = {id: existing?existing.id:uid(), groupId, date, records};
+    if(docId===undefined){ alert('لسه بيتحقق من سجل قديم لنفس اليوم، استنى ثانية وحاول تاني.'); return; }
+    const rec = {id: docId||uid(), groupId, date, records};
     const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date));
     persistAttendance([...others, rec]);
+    if(!docId) setDocId(rec.id);
     dirtyRef.current = false;
     alert('تم حفظ الحضور بنجاح');
   };
@@ -1845,9 +1984,14 @@ function PaymentsTab({students,groups,payments,persistPayments,groupById,setRece
     const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
     if(existing){
       const willBePaid = !existing.paid;
-      persistPayments(payments.map(p=>p.id===existing.id ? {...p, paid: willBePaid, paidDate: willBePaid? todayISO() : null, paidAt: willBePaid ? new Date().toISOString() : null, paidBy: willBePaid ? recipientLabel : null, receiptNo: willBePaid ? (p.receiptNo||nextReceiptNo()) : p.receiptNo} : p));
+      const receiptNo = willBePaid ? (existing.receiptNo||nextReceiptNo()) : existing.receiptNo;
+      persistPayments(payments.map(p=>p.id===existing.id ? {...p, paid: willBePaid, paidDate: willBePaid? todayISO() : null, paidAt: willBePaid ? new Date().toISOString() : null, paidBy: willBePaid ? recipientLabel : null, receiptNo} : p));
+      if(willBePaid) queueAutoNotification('payment', student, {amount: existing.amount, month, receiptNo});
     }else{
-      persistPayments([...payments, {id:uid(), studentId:student.id, month, amount: studentFee(student,g), paid:true, paidDate:todayISO(), paidAt:new Date().toISOString(), paidBy:recipientLabel, receiptNo:nextReceiptNo()}]);
+      const receiptNo = nextReceiptNo();
+      const amount = studentFee(student,g);
+      persistPayments([...payments, {id:uid(), studentId:student.id, month, amount, paid:true, paidDate:todayISO(), paidAt:new Date().toISOString(), paidBy:recipientLabel, receiptNo}]);
+      queueAutoNotification('payment', student, {amount, month, receiptNo});
     }
   };
 
@@ -3526,18 +3670,36 @@ function ReportsTab({students,groups,attendance,grades,payments,groupById}){
   const [studentId,setStudentId] = useState(students[0]?students[0].id:'');
   const [month,setMonth] = useState(monthKey());
   const [showBulk,setShowBulk] = useState(false);
+  const [extraAttendance,setExtraAttendance] = useState([]);
+  const [loadingOlder,setLoadingOlder] = useState(false);
 
   useEffect(()=>{ if(!studentId && students[0]) setStudentId(students[0].id); },[students]);
 
   const student = students.find(s=>s.id===studentId);
-  const stats = student ? computeStudentMonthStats(student, month, attendance, grades, payments, groupById) : null;
+
+  // The live "attendance" prop only covers the last ATTENDANCE_SYNC_DAYS (see App()).
+  // If the selected report month falls before that window, fetch just that one month
+  // on-demand instead of keeping years of history loaded permanently in memory.
+  const isOldMonth = month < attendanceSyncCutoff().slice(0,7);
+  useEffect(()=>{
+    setExtraAttendance([]);
+    if(!student || !student.groupId || !isOldMonth) return;
+    setLoadingOlder(true);
+    fetchAttendanceRange(student.groupId, month)
+      .then(setExtraAttendance)
+      .catch(err=>console.error(err))
+      .finally(()=>setLoadingOlder(false));
+  },[student && student.groupId, month, isOldMonth]);
+
+  const effectiveAttendance = isOldMonth ? extraAttendance : attendance;
+  const stats = student ? computeStudentMonthStats(student, month, effectiveAttendance, grades, payments, groupById) : null;
   const group = stats ? stats.group : null;
   const waLink = student ? buildWhatsAppReportLink(student, month, stats) : null;
 
   return (
     <div>
       <div className="topbar no-print">
-        <div><h1>التقارير الشهرية</h1><div className="date">تقرير شامل لكل طالب — جاهز للطباعة أو الإرسال بالواتساب</div></div>
+        <div><h1>التقارير الشهرية</h1><div className="date">تقرير شامل لكل طالب — جاهز للطباعة أو الإرسال بالواتساب{loadingOlder?' · جارِ تحميل بيانات شهر قديم...':''}</div></div>
         <div style={{display:'flex',gap:10}}>
           <button className="btn btn-primary" onClick={()=>window.print()} disabled={!student}>🖶 طباعة التقرير</button>
           {waLink && <a className="btn btn-ghost" href={waLink} target="_blank" rel="noopener noreferrer">📱 إرسال واتساب</a>}
