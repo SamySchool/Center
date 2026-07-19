@@ -36,6 +36,11 @@ body{
 .brand{display:flex; align-items:center; gap:10px; padding:22px 18px 16px; border-bottom:1px solid #33291f;}
 .brand-sub{font-size:11px; color:#c9beb3; margin-top:2px; letter-spacing:.3px;}
 .nav{padding:10px; display:flex; flex-direction:column; gap:4px; flex:1;}
+.nav-section-title{
+  font-size:10.5px; font-weight:800; letter-spacing:.03em; color:#9b8f85; text-transform:uppercase;
+  padding:14px 14px 4px; margin-top:2px;
+}
+.nav-section-title:first-child{padding-top:4px;}
 .nav button{
   all:unset; cursor:pointer; padding:11px 14px; border-radius:10px; font-size:14.5px; font-weight:700;
   color:#e6ddd3; display:flex; align-items:center; gap:10px; transition:background .15s, color .15s;
@@ -65,7 +70,70 @@ body{
 .grid-3{grid-template-columns:repeat(3,1fr);}
 .grid-2{grid-template-columns:repeat(2,1fr);}
 @media(max-width:1000px){.grid-4{grid-template-columns:repeat(2,1fr);} .grid-3{grid-template-columns:repeat(2,1fr);}}
-@media(max-width:640px){.grid-4,.grid-3,.grid-2{grid-template-columns:1fr;} .app{flex-direction:column;} .sidebar{width:100%; height:auto; position:relative; flex-direction:row; overflow-x:auto;} .nav{flex-direction:row;} .main{padding:16px;}}
+
+/* ---- Mobile nav drawer (hamburger) — replaces the old horizontal-scroll sidebar ---- */
+.mobile-topbar{display:none;}
+.nav-overlay{display:none;}
+@media(max-width:860px){
+  .mobile-topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--charcoal); color:#fff; padding:12px 16px;
+    position:sticky; top:0; z-index:55;
+  }
+  .mobile-topbar .mt-brand{display:flex; align-items:center; gap:10px; font-weight:900; font-size:15px;}
+  .mobile-topbar .mt-brand img{height:32px; width:32px; border-radius:50%;}
+  .hamburger-btn{all:unset; cursor:pointer; padding:8px; font-size:20px; line-height:1; color:#fff;}
+
+  .app{flex-direction:column;}
+  .grid-4,.grid-3,.grid-2{grid-template-columns:1fr;}
+  .sidebar{
+    position:fixed; top:0; right:-85%; height:100vh; width:85%; max-width:300px;
+    z-index:120; transition:right .25s ease; box-shadow:-8px 0 30px rgba(0,0,0,.3);
+  }
+  .sidebar.open{right:0;}
+  .nav-overlay.show{
+    display:block; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:110;
+  }
+  .nav{flex-direction:column;}
+  .nav button{padding:13px 14px; font-size:15px;} /* bigger tap targets on touch screens */
+  .main{padding:16px;}
+
+  /* Global + schedule headers: stack instead of cramming 3 columns on a narrow screen */
+  .app-header{flex-direction:column; gap:10px; padding:12px 16px; height:auto;}
+  .app-header-side{width:100%; justify-content:center !important;}
+  .app-header-clock{order:-1;}
+  .app-header-clock .ahc-time-big{font-size:26px;}
+  .app-header-countdown{max-width:100%; width:100%; text-align:center;}
+  .app-header-countdown .ahc-label{white-space:normal; justify-content:center;}
+
+  .sch-header{flex-direction:column; gap:10px;}
+  .sch-header-side{width:100%; justify-content:center !important;}
+  .sch-header-clock{order:-1;}
+  .sch-header-countdown{width:100%;}
+
+  /* Modals: near-fullscreen on phones instead of a small centered box */
+  .modal-overlay{padding:0 !important;}
+  .modal{
+    max-width:100% !important; width:100% !important; height:100%; max-height:100vh !important;
+    border-radius:0; padding:18px 16px 90px;
+  }
+
+  /* Tables: scroll horizontally with a visible affordance instead of silently clipping */
+  table{min-width:560px;}
+  .card{overflow-x:auto; position:relative;}
+  .card:has(table)::before{
+    content:'⟵ اسحب الجدول يمين وشمال لعرض كل الأعمدة'; display:block; text-align:center;
+    font-size:11px; color:var(--muted); font-weight:700; padding:0 0 8px;
+  }
+
+  .toolbar{gap:8px;}
+  .toolbar .search, .toolbar input, .toolbar select{width:100%;}
+
+  .sch-grid-wrap::after{
+    content:'⟵ اسحب لعرض باقي أيام الأسبوع'; display:block; text-align:center;
+    font-size:11px; color:var(--muted); padding:6px; background:#faf6f1;
+  }
+}
 .stat-label{font-size:12.5px; color:var(--muted); font-weight:700;}
 .stat-value{font-size:26px; font-weight:900; margin-top:6px;}
 .stat-icon{font-size:20px; opacity:.7;}
@@ -90,7 +158,7 @@ label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; marg
 .search{max-width:260px;}
 .modal-overlay{
   position:fixed; inset:0; background:rgba(20,15,10,.55); display:flex; align-items:center; justify-content:center;
-  z-index:50; padding:16px;
+  z-index:130; padding:16px;
 }
 .modal{background:#fff; border-radius:16px; padding:22px; width:100%; max-width:480px; max-height:88vh; overflow-y:auto;}
 .modal h2{margin:0 0 16px; font-size:18px;}
@@ -115,7 +183,7 @@ label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; marg
 .qr-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:14px;}
 .qr-card{background:#fff; border:1.5px dashed var(--border); border-radius:12px; padding:14px; text-align:center; page-break-inside:avoid;}
 .qr-box{display:flex; align-items:center; justify-content:center;}
-.receipt-backdrop{position:fixed; inset:0; background:rgba(20,15,10,.55); display:flex; align-items:center; justify-content:center; z-index:60; padding:16px;}
+.receipt-backdrop{position:fixed; inset:0; background:rgba(20,15,10,.55); display:flex; align-items:center; justify-content:center; z-index:140; padding:16px;}
 .receipt-sheet{background:transparent;}
 .receipt-print{background:#fff; width:280px; padding:18px; border-radius:10px; font-size:12.5px;}
 .receipt-line{display:flex; justify-content:space-between; padding:4px 0; font-size:12.5px;}
@@ -473,21 +541,27 @@ function QuickActionsBar({students,groups,payments,persistPayments,grades,persis
 
   return (
     <React.Fragment>
-      <div className="no-print" style={{position:'fixed',left:24,bottom:24,zIndex:60,display:'flex',flexDirection:'column',alignItems:'flex-start',gap:10}}>
-        {open && (
-          <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:4}}>
-            <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('payment');setOpen(false);}}>💳 سداد مصروفات</button>
-            <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('student');setOpen(false);}}>👤 إضافة طالب جديد</button>
-            <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('grade');setOpen(false);}}>✎ إضافة درجات</button>
-            <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('attendance');setOpen(false);}}>✓ حضور وغياب</button>
-          </div>
-        )}
-        <button onClick={()=>setOpen(o=>!o)} style={{
-          width:56,height:56,borderRadius:'50%',border:'none',cursor:'pointer',
-          background:'var(--red)',color:'#fff',fontSize:26,fontWeight:900,
-          boxShadow:'0 8px 24px rgba(255,0,0,.4)',lineHeight:1,
-        }}>{open?'✕':'⚡'}</button>
-      </div>
+      {!active && (
+        <div className="no-print" style={{
+          position:'fixed', left:'max(24px, env(safe-area-inset-left))',
+          bottom:'max(24px, calc(env(safe-area-inset-bottom) + 12px))',
+          zIndex:60, display:'flex', flexDirection:'column', alignItems:'flex-start', gap:10,
+        }}>
+          {open && (
+            <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:4}}>
+              <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('payment');setOpen(false);}}>💳 سداد مصروفات</button>
+              <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('student');setOpen(false);}}>👤 إضافة طالب جديد</button>
+              <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('grade');setOpen(false);}}>✎ إضافة درجات</button>
+              <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('attendance');setOpen(false);}}>✓ حضور وغياب</button>
+            </div>
+          )}
+          <button onClick={()=>setOpen(o=>!o)} style={{
+            width:56,height:56,borderRadius:'50%',border:'none',cursor:'pointer',
+            background:'var(--red)',color:'#fff',fontSize:26,fontWeight:900,
+            boxShadow:'0 8px 24px rgba(255,0,0,.4)',lineHeight:1,
+          }}>{open?'✕':'⚡'}</button>
+        </div>
+      )}
 
       {active==='payment' && (
         <Modal title="سداد مصروفات — بالكود أو الاسم" onClose={close}>
@@ -818,6 +892,7 @@ function App(){
   const [loadErrors,setLoadErrors] = useState([]);
   const [receiptData,setReceiptData] = useState(null);
   const [tab,setTab] = useState('dashboard');
+  const [mobileNavOpen,setMobileNavOpen] = useState(false);
   const [teachers,setTeachers] = useState([]);
   const [groups,setGroups] = useState([]);
   const [students,setStudents] = useState([]);
@@ -1064,40 +1139,66 @@ function App(){
 
   const isAdmin = role==='admin';
 
-  const NAV = [
-    {id:'dashboard', label:'الرئيسية', icon:'⌂'},
-    {id:'students', label:'الطلاب', icon:'👤'},
-    {id:'groups', label:'المجموعات والمدرسين', icon:'👥'},
-    {id:'attendance', label:'الحضور والغياب', icon:'✓'},
-    {id:'scan', label:'تسجيل حضور بالكود', icon:'▣'},
-    {id:'faces', label:'التعرف على الوجه', icon:'◎'},
-    {id:'codes', label:'أكواد الطلاب', icon:'⌗'},
-    {id:'grades', label:'الدرجات', icon:'✎'},
-    {id:'payments', label:'المصروفات', icon:'৳'},
-    {id:'private', label:'الدروس الخصوصية', icon:'✦'},
-    {id:'trash', label:'سلة المحذوفات', icon:'🗑'},
-    {id:'secretaryActivity', label:'نشاط السكرتيرة', icon:'🛡'},
-    {id:'schedule', label:'جدولي', icon:'🗓'},
-    {id:'accounting', label:'الحسابات', icon:'⎘'},
-    {id:'reports', label:'التقارير الشهرية', icon:'▤'},
+  const NAV_SECTIONS = [
+    { items: [
+        {id:'dashboard', label:'الرئيسية', icon:'⌂'},
+      ] },
+    { title:'الطلاب والحضور', items: [
+        {id:'students', label:'الطلاب', icon:'👤'},
+        {id:'groups', label:'المجموعات والمدرسين', icon:'👥'},
+        {id:'attendance', label:'الحضور والغياب', icon:'✓'},
+        {id:'scan', label:'تسجيل حضور بالكود', icon:'▣'},
+        {id:'faces', label:'التعرف على الوجه', icon:'◎'},
+        {id:'codes', label:'أكواد الطلاب', icon:'⌗'},
+      ] },
+    { title:'الدرجات والمصروفات', items: [
+        {id:'grades', label:'الدرجات', icon:'✎'},
+        {id:'payments', label:'المصروفات', icon:'৳'},
+        {id:'private', label:'الدروس الخصوصية', icon:'✦'},
+      ] },
+    { title:'أدواتي', items: [
+        {id:'schedule', label:'جدولي', icon:'🗓'},
+        {id:'reports', label:'التقارير الشهرية', icon:'▤'},
+      ] },
+    { title:'الإدارة', items: [
+        {id:'trash', label:'سلة المحذوفات', icon:'🗑'},
+        {id:'secretaryActivity', label:'نشاط السكرتيرة', icon:'🛡'},
+        {id:'accounting', label:'الحسابات', icon:'⎘'},
+      ] },
   ];
+  const ADMIN_ONLY_IDS = new Set(['accounting','schedule','secretaryActivity']);
 
   return (
     <React.Fragment>
     <div className={receiptData?"no-print":""}>
+      <div className="mobile-topbar no-print">
+        <button className="hamburger-btn" onClick={()=>setMobileNavOpen(true)} aria-label="القائمة">☰</button>
+        <div className="mt-brand">{LOGO(32)} Samy School</div>
+        <span style={{width:36}}></span>
+      </div>
       <GlobalHeader isAdmin={isAdmin} students={students} />
       <QuickActionsBar {...{students,groups,payments,persistPayments,grades,persistGrades,attendance,persistAttendance,persistStudents,groupById,studentsInGroup,setReceiptData,isAdmin,actorRef}} />
       <div className="app">
-      <div className="sidebar no-print">
+      <div className={"nav-overlay"+(mobileNavOpen?' show':'')} onClick={()=>setMobileNavOpen(false)}></div>
+      <div className={"sidebar no-print"+(mobileNavOpen?' open':'')}>
         <div className="brand">
           {LOGO(74)}
         </div>
         <div className="nav">
-          {NAV.filter(n=> (n.id!=='accounting' && n.id!=='schedule' && n.id!=='secretaryActivity') || isAdmin).map(n=>(
-            <button key={n.id} className={tab===n.id?'active':''} onClick={()=>setTab(n.id)}>
-              <span className="nav-icon">{n.icon}</span>{n.label}
-            </button>
-          ))}
+          {NAV_SECTIONS.map((section,si)=>{
+            const visibleItems = section.items.filter(n=> !ADMIN_ONLY_IDS.has(n.id) || isAdmin);
+            if(visibleItems.length===0) return null;
+            return (
+              <React.Fragment key={si}>
+                {section.title && <div className="nav-section-title">{section.title}</div>}
+                {visibleItems.map(n=>(
+                  <button key={n.id} className={tab===n.id?'active':''} onClick={()=>{ setTab(n.id); setMobileNavOpen(false); }}>
+                    <span className="nav-icon">{n.icon}</span>{n.label}
+                  </button>
+                ))}
+              </React.Fragment>
+            );
+          })}
         </div>
         <div className="sidebar-foot">
           <div className="small" style={{color:'#cfc4b9',marginBottom:10}}>
