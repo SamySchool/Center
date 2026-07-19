@@ -4,6 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SamySchool — نظام إدارة السنتر</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a1512">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Samy School">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=Tajawal:wght@400;500;700;900&display=swap');
 
@@ -2763,7 +2771,7 @@ function ScheduleWeeklyGrid({occs,onEdit}){
               style={{top, height, right:`calc(60px + ${o.day} * ${colW} + 3px)`, width:`calc(${colW} - 6px)`}}
               onClick={()=> o.fixed ? alert('موعد المدرسة ثابت ولا يمكن تعديله من هنا.') : onEdit(o)}>
               <div className="t1">{o.name}{o.conflict?' ⚠':''}</div>
-              <div className="t2">{schedFmt12(o.start)} · {o.duration>=60?(o.duration/60)+' س':o.duration+' د'}</div>
+              <div className="t2">{schedFmt12(o.start)} – {schedFmt12(schedMinToTime(o.endMin))}</div>
             </div>
           );
         })}
@@ -2890,7 +2898,7 @@ function CenterScheduleWidget(){
       {occs.map(o=>(
         <div key={o.id+'_'+o.day} className="sch-widget-row">
           <span className="badge badge-gray">{SCHED_DAY_SHORT[o.day]}</span>
-          <span style={{fontWeight:800}}>{schedFmt12(o.start)}</span>
+          <span style={{fontWeight:800}}>{schedFmt12(o.start)} – {schedFmt12(schedMinToTime(o.endMin))}</span>
           <span className="muted">{o.name}</span>
           <span className="sch-owner-tag">{SCHEDULE_OWNER_NAME_EN}</span>
         </div>
@@ -3009,7 +3017,7 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
         if(p) revenue += Number(p.amount)||0;
       });
     });
-    const avgPct = myGroups.length ? myGroups.reduce((s,g)=>s+(Number(g.commissionPercent)??50),0)/myGroups.length : 50;
+    const avgPct = myGroups.length ? myGroups.reduce((s,g)=>s+(Number(g.commissionPercent) || 70),0)/myGroups.length : 70;
     return {revenue, avgPct: Math.round(avgPct), groupCount: myGroups.length};
   };
 
@@ -3820,6 +3828,17 @@ try{
   }catch(err){
     console.error(err);
     document.getElementById('root').innerHTML = '<div style="font-family:sans-serif;direction:rtl;max-width:560px;margin:60px auto;padding:24px;background:#fff;border:1px solid #e9e0d6;border-radius:14px;"><h2 style="color:#d1332f;">حدث خطأ أثناء تحويل الكود</h2><p style="color:#8a7f78;font-size:13px;">'+err.message+'</p></div>';
+  }
+</script>
+<script>
+  // Registers the service worker so the app can be installed to the home screen and
+  // launched like a native app (see sw.js). Safe to no-op if the file isn't deployed yet.
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('sw.js').catch(function(err){
+        console.warn('Service worker registration failed (app still works normally in-browser):', err);
+      });
+    });
   }
 </script>
 </body>
