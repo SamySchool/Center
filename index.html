@@ -1727,6 +1727,7 @@ function TeacherForm({teacher,onCancel,onSave}){
     <div>
       <Field label="اسم المدرس"><input value={f.name} onChange={e=>set('name',e.target.value)} /></Field>
       <Field label="المادة"><input value={f.subject} onChange={e=>set('subject',e.target.value)} /></Field>
+      <Field label="رقم واتساب المدرس (لإرسال تقرير المدفوعات الشهري)"><input value={f.phone||''} onChange={e=>set('phone',e.target.value)} placeholder="01xxxxxxxxx" /></Field>
       <div className="field" style={{display:'flex',alignItems:'center',gap:8}}>
         <input type="checkbox" id="isOwner" checked={!!f.isOwner} onChange={e=>set('isOwner',e.target.checked)} style={{width:'auto'}} />
         <label htmlFor="isOwner" style={{margin:0,cursor:'pointer'}}>صاحب الأكاديمية (خارج نظام نسبة المدرسين — حساباته منفصلة)</label>
@@ -2982,6 +2983,53 @@ function TrashTab({isAdmin}){
   );
 }
 
+// Full monthly payments breakdown for one commission-based teacher (Gouda/Amer): every
+// student in his groups, whether/when they paid this month, total collected, and his net
+// 70% share vs the academy's cut. Sent to the teacher himself via WhatsApp (arrears payout
+// pattern: report for a given month goes out at that month's end, e.g. Sept report on Sep 30).
+function buildTeacherPaymentReportText(teacher, groups, students, payments, month){
+  const myGroups = groups.filter(g=>g.teacherId===teacher.id);
+  const myGroupIds = new Set(myGroups.map(g=>g.id));
+  const myStudents = students.filter(s=>myGroupIds.has(s.groupId));
+
+  const rows = myStudents.map(s=>{
+    const g = groups.find(x=>x.id===s.groupId);
+    const p = payments.find(p=>p.studentId===s.id && p.month===month);
+    const paid = !!(p && p.paid);
+    return {student:s, group:g, paid, amount: paid?(Number(p.amount)||0):0, paidDate: paid?p.paidDate:null};
+  }).sort((a,b)=> (b.paid?1:0)-(a.paid?1:0));
+
+  const total = rows.reduce((s,r)=>s+r.amount,0);
+  const avgPct = myGroups.length ? Math.round(myGroups.reduce((s,g)=>s+(Number(g.commissionPercent)||70),0)/myGroups.length) : 70;
+  const share = Math.round(total*avgPct/100);
+  const academyCut = total - share;
+
+  const lines = [
+    `📊 تقرير مدفوعات شهر ${monthLabel(month)} — Samy School`,
+    ``,
+    `مستر ${teacher.name} المحترم،`,
+    `إليك تفاصيل مدفوعات طلابك لشهر ${monthLabel(month)}:`,
+    ``,
+  ];
+  rows.forEach((r,i)=>{
+    lines.push(`${i+1}. ${r.student.name}${r.group?' ('+r.group.name+')':''} — ${r.paid?`${fmtMoney(r.amount)} بتاريخ ${r.paidDate}`:'لم يسدد بعد ⚠️'}`);
+  });
+  lines.push(
+    ``, `────────────`,
+    `💰 إجمالي التحصيل: ${fmtMoney(total)}`,
+    `✅ نصيبك (${avgPct}%): ${fmtMoney(share)}`,
+    `🏫 نصيب الأكاديمية: ${fmtMoney(academyCut)}`,
+    `────────────`, ``,
+    `بالتوفيق 🌟`
+  );
+  return {text: lines.join('\n'), total, share, academyCut, unpaidCount: rows.filter(r=>!r.paid).length};
+}
+function teacherReportWaLink(teacher, reportText){
+  const phone = normalizeEgyptPhone(teacher.phone);
+  if(!phone) return null;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(reportText)}`;
+}
+
 function AccountingTab({teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}){
   const [view,setView] = useState('expenses'); // expenses | shares | daily | treasury
   const [month,setMonth] = useState(currentMonth);
@@ -3031,6 +3079,19 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
   });
   const totalShares = teacherShares.reduce((s,t)=>s+t.share,0);
   const academyCutFromTeachers = teacherShares.reduce((s,t)=>s+t.academyCut,0);
+
+  // Teachers get paid in arrears — the report for a given month is meant to go out at that
+  // month's end (school year starts Sep 1, so the first report is Sep 30). This just flags
+  // when it's time; sending itself is always the one-click button (see queueAutoNotification
+  // pattern elsewhere in the app — same "prepared automatically, one tap to actually send").
+  const isDay30OrLater = new Date().getDate() >= 30;
+
+  const sendTeacherReport = (teacher) => {
+    if(!teacher.phone){ alert(`مفيش رقم واتساب مسجل لمستر ${teacher.name}. ضيفه من تبويب "المجموعات والمدرسين" أولاً.`); return; }
+    const {text} = buildTeacherPaymentReportText(teacher, groups, students, payments, month);
+    const link = teacherReportWaLink(teacher, text);
+    if(link) window.open(link, '_blank');
+  };
 
   let ownerBlock = null;
   if(owner){
@@ -3111,6 +3172,18 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
             <div className="card"><div className="stat-label">صافي ربح الأكاديمية</div><div className="stat-value" style={{color:academyNetProfit>=0?'var(--green)':'var(--rose)'}}>{fmtMoney(academyNetProfit)}</div></div>
           </div>
 
+          {isDay30OrLater && (
+            <div className="card" style={{marginBottom:18, borderColor:'var(--amber)', background:'var(--amber-bg)'}}>
+              <div className="section-title">🔔 تذكير: تقارير مدفوعات المدرسين لشهر {monthLabel(month)} جاهزة للإرسال</div>
+              <div className="small muted" style={{marginBottom:10}}>بما إن المدرسين بيتخاسبوا مؤخر آخر الشهر، دلوقتي وقت مناسب تبعتلهم تقرير الشهر ده.</div>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                {teacherShares.map(t=>(
+                  <button key={t.teacher.id} className="btn btn-primary btn-sm" onClick={()=>sendTeacherReport(t.teacher)}>📤 إرسال لمستر {t.teacher.name}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="card" style={{marginBottom:18}}>
             <div className="section-title">مدرسين نظام النسبة — {monthLabel(month)}</div>
             <table>
@@ -3124,7 +3197,10 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
                     <td style={{fontWeight:800}}>{fmtMoney(t.share)}</td>
                     <td className="small muted">{fmtMoney(t.academyCut)}</td>
                     <td className="small" style={{color:'var(--green)',fontWeight:800}}>{fmtMoney(paidToThisTeacher)}</td>
-                    <td><button className="btn btn-ghost btn-sm" onClick={()=>setPayingOut(t.teacher)}>💰 تسجيل صرف</button></td>
+                    <td style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                      <button className="btn btn-ghost btn-sm" onClick={()=>setPayingOut(t.teacher)}>💰 تسجيل صرف</button>
+                      <button className="btn btn-ghost btn-sm" onClick={()=>sendTeacherReport(t.teacher)}>📤 تقرير الشهر</button>
+                    </td>
                   </tr>
                   );
                 })}
