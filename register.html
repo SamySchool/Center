@@ -32,19 +32,26 @@
     padding:10px clamp(18px,4vw,56px);
     overflow:hidden;
   }
-  .site-header .name-slot{width:100%; height:100%; display:flex; align-items:center; justify-content:center;}
+  .site-header .name-slot{width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:0 6px; box-sizing:border-box;}
   .site-header .name-slot .en{
     font-weight:800; color:#fff; letter-spacing:.01em; line-height:1;
-    font-size:min(9vw,7vh); white-space:nowrap;
+    font-size:min(8vw,7vh); white-space:nowrap; text-align:center;
   }
 
   @media (max-width:720px){
-    header.site-header{min-height:9vh; padding:16px 18px;}
-    .site-header .name-slot .en{font-size:min(11vw,7vh);}
+    header.site-header{min-height:9vh; padding:16px 12px;}
+    .site-header .name-slot .en{font-size:min(8vw,7vh);}
   }
 
-  .logo-band{display:flex; justify-content:center; padding:26px 0 4px;}
+  .logo-band{display:flex; align-items:center; justify-content:center; gap:14px; padding:26px 0 4px;}
   .logo-band img{width:clamp(72px,9vw,100px); height:auto; display:block;}
+  .logo-band .exp-badge{
+    display:flex; flex-direction:column; align-items:flex-start; line-height:1.1;
+    font-family:'Poppins',sans-serif; direction:ltr; unicode-bidi:isolate;
+    border-inline-start:2px solid var(--primary); padding-inline-start:12px;
+  }
+  .logo-band .exp-badge .num{font-weight:800; font-size:20px; color:var(--primary);}
+  .logo-band .exp-badge .txt{font-weight:600; font-size:11px; color:var(--muted); letter-spacing:.03em; white-space:nowrap;}
 
   main{max-width:1000px; margin:0 auto; padding:0 18px;}
 
@@ -117,7 +124,10 @@
   </div>
 </header>
 
-<div class="logo-band"><img src="samyschool-logo-transparent.png" alt="SamySchool logo" /></div>
+<div class="logo-band">
+  <img src="samyschool-logo-transparent.png" alt="SamySchool logo" />
+  <div class="exp-badge" dir="ltr"><span class="num">+14</span><span class="txt">Years Experience</span></div>
+</div>
 
 <main>
 
@@ -126,11 +136,11 @@
     <div class="bi-row">
       <div class="en" dir="ltr">
         <h2 class="en" dir="ltr">Preparatory Stage Booking 2026/2027</h2>
-        <p>Welcome! Please fill in the booking form below to reserve your seat for the 2026/2027 academic year with Mr. Mohamed Samy. Make sure all details are accurate — your student code and group schedule will be generated automatically based on your grade level.</p>
+        <p>Welcome! Please fill in the booking form below to reserve your seat for the 2026/2027 academic year with Mr. Mohamed Samy. Make sure all details are accurate — your group schedule will be shown automatically based on your grade level.</p>
       </div>
       <div class="ar" dir="rtl">
         <h2 class="ar" dir="rtl">حجز المرحلة الإعدادية 2026/2027</h2>
-        <p>أهلًا بيك! من فضلك املأ استمارة الحجز تحت عشان تحجز مكانك في العام الدراسي 2026/2027 مع الأستاذ محمد سامي. تأكد إن كل البيانات صحيحة — كود الطالب وموعد المجموعة هيتحددوا أوتوماتيك حسب المرحلة الدراسية.</p>
+        <p>أهلًا بيك! من فضلك املأ استمارة الحجز تحت عشان تحجز مكانك في العام الدراسي 2026/2027 مع مستر محمد سامي. تأكد إن كل البيانات صحيحة — موعد المجموعة هيبان أوتوماتيك حسب المرحلة الدراسية.</p>
       </div>
     </div>
   </section>
@@ -193,9 +203,8 @@
   <section class="bi-section" id="successView">
     <div class="ticket">
       <div class="code-area">
-        <div><span class="en" dir="ltr">STUDENT CODE</span> — <span class="ar" dir="rtl">كود الطالب</span></div>
-        <div id="ticketCode" class="code"></div>
-        <div id="ticketName" class="name"></div>
+        <div><span class="en" dir="ltr">BOOKING CONFIRMED</span> — <span class="ar" dir="rtl">تم استلام الحجز</span></div>
+        <div id="ticketName" class="name" style="font-family:'Cairo',sans-serif;font-weight:800;font-size:22px;margin-top:8px;"></div>
       </div>
       <div class="divider"></div>
       <div id="ticketDetails" class="details"></div>
@@ -254,6 +263,11 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
 // ---------- Config ----------
+// هذه الاستمارة خاصة بمستر محمد سامي (اللغة الإنجليزية) فقط.
+// أي استمارة حجز تانية (رياضيات/ألماني) هتكون ملف منفصل بـ TEACHER_ID مختلف،
+// عشان الأكواد والمجموعات ميتلخبطوش مع بعض في السستم.
+const TEACHER_ID = 't-samy';
+const SUBJECT_LABEL = 'اللغة الإنجليزية';
 const STAGES_2027 = {
   'إعدادي 1': {en:'Prep 1', schedule:'الإثنين والخميس - 4:00 م', scheduleEn:'Mon & Thu, 4:00 PM', codeMin:10, codeMax:30},
   'إعدادي 2': {en:'Prep 2', schedule:'السبت والثلاثاء - 3:30 م', scheduleEn:'Sat & Tue, 3:30 PM', codeMin:31, codeMax:50},
@@ -308,32 +322,24 @@ async function submitBooking(){
   btn.disabled = true; label.textContent = 'جارِ الإرسال...';
   const stageCfg = STAGES_2027[stage];
   const enrollRef = db.collection('enrollments2027').doc(spNorm);
-  const counterRef = db.collection('enrollmentCounters2027').doc('counts');
 
   try{
     const record = await db.runTransaction(async (tx) => {
       const enrollSnap = await tx.get(enrollRef);
       if(enrollSnap.exists) throw new Error('DUP_PHONE');
-      const counterSnap = await tx.get(counterRef);
-      const counts = counterSnap.exists ? counterSnap.data() : {};
-      const used = counts[stage] || 0;
-      const maxSlots = stageCfg.codeMax - stageCfg.codeMin + 1;
-      if(used >= maxSlots) throw new Error('FULL');
-      const code = stageCfg.codeMin + used;
       const rec = {
         name, stage, track, schoolName, studentPhone: spNorm, parentPhone: ppNorm,
-        schedule: stageCfg.schedule, code, createdAt: new Date().toISOString(),
+        schedule: stageCfg.schedule, createdAt: new Date().toISOString(),
+        teacherId: TEACHER_ID, subject: SUBJECT_LABEL,
         confirmed:false, confirmedAt:null, confirmedBy:null, studentDocId:null,
       };
       tx.set(enrollRef, rec);
-      tx.set(counterRef, Object.assign({}, counts, {[stage]: used+1}), {merge:true});
       return rec;
     });
     showSuccess(record, stageCfg);
   }catch(err){
     btn.disabled = false; label.textContent = 'تسجيل الحجز';
     if(err.message==='DUP_PHONE') showError('رقم موبايل الطالب ده متسجل بالفعل من قبل.','This student phone number is already registered.');
-    else if(err.message==='FULL') showError('اكتمل العدد المسموح به لهذه المرحلة.','This grade level is fully booked.');
     else { console.error(err); showError('حصل خطأ أثناء إرسال البيانات، حاول تاني.','An error occurred, please try again.'); }
   }
 }
@@ -342,24 +348,23 @@ function showSuccess(record, stageCfg){
   document.getElementById('formView').style.display='none';
   document.getElementById('successView').style.display='block';
 
-  document.getElementById('ticketCode').textContent = 'SS-'+record.code;
   document.getElementById('ticketName').textContent = record.name;
   document.getElementById('ticketDetails').innerHTML = `
     <div><span><span class="en" dir="ltr">Grade</span> — <span class="ar" dir="rtl">المرحلة</span></span><b>${record.stage} (${stageCfg.en})</b></div>
     <div><span><span class="en" dir="ltr">Schedule</span> — <span class="ar" dir="rtl">المجموعة</span></span><b>${record.schedule}</b></div>
     <div><span><span class="en" dir="ltr">School</span> — <span class="ar" dir="rtl">المدرسة</span></span><b>${record.schoolName}</b></div>
   `;
-  document.getElementById('paySummaryAr').textContent = `حوّل مصروفات المذكرات مقدمًا، واكتب كود الطالب SS-${record.code} عند التحويل.`;
-  document.getElementById('paySummaryEn').textContent = `Please transfer the notebooks fee and include your student code SS-${record.code} with the payment.`;
+  document.getElementById('paySummaryAr').textContent = `حوّل مصروفات المذكرات، وبعدها ابعت تأكيد الحجز على واتساب.`;
+  document.getElementById('paySummaryEn').textContent = `Please transfer the notebooks fee, then send your booking confirmation on WhatsApp.`;
   document.getElementById('instapayLink').href = INSTAPAY_LINK;
 
+  // رسالة تأكيد الحجز على واتساب — الاسم الثلاثي والمرحلة بس، حسب طلب مستر محمد.
   const waText = encodeURIComponent(
-    `مرحبًا أستاذ محمد 🌟\n`+
-    `أنا ${record.name}\n`+
-    `كود الطالب: SS-${record.code}\n`+
-    `المرحلة: ${record.stage} (${record.track})\n`+
-    `المجموعة: ${record.schedule}\n\n`+
-    `تم تحويل مصروفات المذكرات (${NOTEBOOKS_FEE} ج.م)، برجاء تأكيد الحجز 🙏`
+    `مرحبًا مستر محمد 🌟\n`+
+    `تأكيد حجز:\n`+
+    `الاسم: ${record.name}\n`+
+    `المرحلة: ${record.stage}\n\n`+
+    `تم تحويل مصروفات المذكرات، برجاء تأكيد الحجز 🙏`
   );
   document.getElementById('waConfirmLink').href = `https://wa.me/${toWaFormat(MOHAMED_WHATSAPP)}?text=${waText}`;
 
