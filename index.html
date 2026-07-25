@@ -77,6 +77,7 @@ tr:last-child td{border-bottom:none;}
 .badge{display:inline-block; padding:3px 10px; border-radius:20px; font-size:11.5px; font-weight:800;}
 .badge-green{background:var(--green-bg); color:var(--green);}
 .badge-amber{background:var(--amber-bg); color:var(--amber);}
+.badge-blue{background:#dbeafe; color:#1d4ed8;}
 .badge-rose{background:var(--rose-bg); color:var(--rose);}
 .badge-gray{background:#f0ebe4; color:var(--muted);}
 input,select,textarea{
@@ -283,8 +284,13 @@ const ENROLLMENT_2027_STAGES = [
   {stage:'إعدادي 2', schedule:'السبت والثلاثاء - 3:30 م', codeMin:31, codeMax:50},
   {stage:'إعدادي 3', schedule:'الإثنين والخميس - 6:00 م', codeMin:51, codeMax:70},
 ];
-const NOTEBOOKS_EXPLAIN_FEE = 300; // مذكرات الشرح (الترم الأول)
-const NOTEBOOKS_REVIEW_FEE = 250;  // مذكرات المراجعة (آخر الترم)
+const NOTEBOOKS_EXPLAIN_FEE = 300; // مذكرات الشرح (الترم الأول) — القيمة الافتراضية، وتقدر تتغير لكل طالب لوحده
+const NOTEBOOKS_REVIEW_FEE = 250;  // مذكرات المراجعة (آخر الترم) — القيمة الافتراضية، وتقدر تتغير لكل طالب لوحده
+
+// عند إضافة طالب جديد وتحديد أكتر من مادة (إنجليزي/رياضيات/ألماني)، السستم بيعمل
+// سجل طالب منفصل لكل مادة ويربطه تلقائي بمجموعة نفس المدرس ونفس المرحلة.
+const SUBJECT_TEACHER_MAP = {'اللغة الإنجليزية':'t-samy', 'الرياضيات':'t-gouda', 'اللغة الألمانية':'t-amer'};
+const SUBJECT_OPTIONS = Object.keys(SUBJECT_TEACHER_MAP);
 
 // Generic manual-send WhatsApp link for fee reminders / payment receipts. Free — just opens
 // WhatsApp with the message ready; a human still has to press "send" themselves.
@@ -967,8 +973,8 @@ function App(){
     const newStudent = {
       id: uid(), name: enrollment.name, phone: enrollment.studentPhone, parentPhone: enrollment.parentPhone,
       schoolName: enrollment.schoolName, educationType: enrollment.track, stage: enrollment.stage,
-      groupId: group.id, feeOverride: '', joinDate: todayISO(), status: 'active',
-      notes: `مسجل من استمارة حجز 2026/2027 — كود SS-${enrollment.code}`,
+      groupId: group.id, subject: enrollment.subject || 'اللغة الإنجليزية', feeOverride: '', joinDate: todayISO(), status: 'active',
+      notes: `مسجل من استمارة حجز 2026/2027`,
       notebooksExplain: {paid:true, amount:NOTEBOOKS_EXPLAIN_FEE, paidAt:new Date().toISOString(), paidBy:recipientLabel},
       notebooksReview: {paid:false, amount:NOTEBOOKS_REVIEW_FEE, paidAt:null, paidBy:null},
     };
@@ -1209,7 +1215,7 @@ function App(){
 
       <div className="main">
         {tab==='dashboard' && <Dashboard {...{students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab,isAdmin}} />}
-        {tab==='students' && <StudentsTab {...{students,groups,persistStudents,payments,persistPayments,currentMonth,groupById,attendance,isAdmin,actorRef}} />}
+        {tab==='students' && <StudentsTab {...{students,groups,teachers,persistStudents,payments,persistPayments,currentMonth,groupById,attendance,isAdmin,actorRef}} />}
         {tab==='enrollments' && <EnrollmentsTab {...{enrollments,groups,confirmEnrollment,isAdmin}} />}
         {tab==='groups' && <GroupsTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin,actorRef}} />}
         {tab==='attendance' && <AttendanceTab {...{groups,students,attendance,persistAttendance,studentsInGroup}} />}
@@ -1516,7 +1522,7 @@ function EnrollmentsTab({enrollments,groups,confirmEnrollment,isAdmin}){
 
   const filtered = enrollments.filter(e=>{
     const q = query.trim().toLowerCase();
-    const matchQ = !q || (e.name||'').toLowerCase().includes(q) || String(e.code).includes(q) || (e.studentPhone||'').includes(q);
+    const matchQ = !q || (e.name||'').toLowerCase().includes(q) || (e.studentPhone||'').includes(q);
     const matchS = filterStage==='all' || e.stage===filterStage;
     return matchQ && matchS;
   });
@@ -1528,9 +1534,13 @@ function EnrollmentsTab({enrollments,groups,confirmEnrollment,isAdmin}){
   };
 
   const handleConfirmClick = (enrollment) => {
-    const matches = groups.filter(g=>g.stage===enrollment.stage);
+    // مطابقة المرحلة لوحدها مش كفاية بعد ما هيتضاف مدرسين تانيين (رياضيات/ألماني) —
+    // ده كان ممكن يخلي حجز إنجليزي يترابط غلط بمجموعة مدرس تاني نفس المرحلة.
+    // enrollment.teacherId من الاستمارة نفسها؛ لو مش موجود (سجل قديم قبل التحديث) بنعتبره إنجليزي (t-samy).
+    const enrollTeacherId = enrollment.teacherId || 't-samy';
+    const matches = groups.filter(g=>g.stage===enrollment.stage && g.teacherId===enrollTeacherId);
     if(matches.length===0){
-      alert(`لا توجد مجموعة بمرحلة "${enrollment.stage}" حتى الآن. من فضلك أنشئ المجموعة أولاً من تبويب "المجموعات والمدرسين" بنفس المرحلة، وبعدين ارجع أكّد الحجز.`);
+      alert(`لا توجد مجموعة بمرحلة "${enrollment.stage}" لنفس المدرس/المادة حتى الآن. من فضلك أنشئ المجموعة أولاً من تبويب "المجموعات والمدرسين" بنفس المرحلة ونفس المدرس، وبعدين ارجع أكّد الحجز.`);
       return;
     }
     if(matches.length===1){ doConfirm(enrollment, matches[0]); return; }
@@ -1554,12 +1564,12 @@ function EnrollmentsTab({enrollments,groups,confirmEnrollment,isAdmin}){
       <div className="card">
         {filtered.length===0 ? <Empty icon="📝" text="لا توجد طلبات حجز مطابقة" /> : (
           <table>
-            <thead><tr><th>الكود</th><th>الاسم</th><th>المرحلة</th><th>المسار</th><th>المدرسة</th><th>هاتف الطالب</th><th>هاتف ولي الأمر</th><th>تاريخ التسجيل</th><th>الحالة</th><th></th></tr></thead>
+            <thead><tr><th>الاسم</th><th>المادة</th><th>المرحلة</th><th>المسار</th><th>المدرسة</th><th>هاتف الطالب</th><th>هاتف ولي الأمر</th><th>تاريخ التسجيل</th><th>الحالة</th><th></th></tr></thead>
             <tbody>
               {filtered.map(e=>(
                 <tr key={e.id}>
-                  <td style={{fontWeight:900}}>SS-{e.code}</td>
                   <td>{e.name}</td>
+                  <td><span className="badge badge-blue">{e.subject || 'اللغة الإنجليزية'}</span></td>
                   <td>{e.stage}</td>
                   <td>{e.track}</td>
                   <td className="small muted">{e.schoolName}</td>
@@ -1586,7 +1596,7 @@ function EnrollmentsTab({enrollments,groups,confirmEnrollment,isAdmin}){
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <h3>اختر المجموعة المناسبة لـ {pickingGroupFor.name}</h3>
             <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:12}}>
-              {groups.filter(g=>g.stage===pickingGroupFor.stage).map(g=>(
+              {groups.filter(g=>g.stage===pickingGroupFor.stage && g.teacherId===(pickingGroupFor.teacherId||'t-samy')).map(g=>(
                 <button key={g.id} className="btn btn-ghost" onClick={()=>doConfirm(pickingGroupFor,g)}>{g.name} — {g.schedule||''}</button>
               ))}
             </div>
@@ -1598,7 +1608,7 @@ function EnrollmentsTab({enrollments,groups,confirmEnrollment,isAdmin}){
   );
 }
 
-function StudentsTab({students,groups,persistStudents,payments,persistPayments,currentMonth,groupById,attendance,isAdmin,actorRef}){
+function StudentsTab({students,groups,teachers,persistStudents,payments,persistPayments,currentMonth,groupById,attendance,isAdmin,actorRef}){
   const [query,setQuery] = useState('');
   const [filterGroup,setFilterGroup] = useState('all');
   const [editing,setEditing] = useState(null); // student obj or 'new'
@@ -1609,10 +1619,37 @@ function StudentsTab({students,groups,persistStudents,payments,persistPayments,c
     return matchQ && matchG;
   });
 
-  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',feeOverride:'',joinDate:todayISO(),notes:'',status:'active'});
+  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',subjects:[],subject:'',feeOverride:'',joinDate:todayISO(),notes:'',status:'active',
+    notebooksExplain:{paid:false,amount:NOTEBOOKS_EXPLAIN_FEE,paidAt:null,paidBy:null},
+    notebooksReview:{paid:false,amount:NOTEBOOKS_REVIEW_FEE,paidAt:null,paidBy:null}});
 
   const save = (data) => {
-    const {isNew, ...clean} = data;
+    const {isNew, subjects, ...clean} = data;
+    if(isNew && subjects && subjects.length>0){
+      // طالب جديد محدَّد له أكتر من مادة (أو مادة واحدة عن طريق القائمة الجديدة) —
+      // بننشئله سجل مستقل لكل مادة، كل سجل مربوط بمجموعة نفس المدرس ونفس المرحلة تلقائيًا،
+      // ومربوطين ببعض بـ linkId عشان تعرف إنهم نفس الطالب الحقيقي.
+      const linkId = uid();
+      const created = [];
+      const failed = [];
+      subjects.forEach(subjLabel=>{
+        const teacherId = SUBJECT_TEACHER_MAP[subjLabel];
+        const g = groups.find(x=>x.teacherId===teacherId && x.stage===clean.stage);
+        if(!g){ failed.push(subjLabel); return; }
+        created.push({...clean, id: created.length===0 ? clean.id : uid(), groupId:g.id, subject:subjLabel, linkId});
+      });
+      if(created.length===0){
+        alert('محدّش اتضاف — مفيش مجموعة بنفس المرحلة للمواد اللي اخترتها. أنشئ المجموعة الأول من تبويب "المجموعات والمدرسين" بنفس المرحلة ونفس المدرس، وبعدين ارجع أضف الطالب.');
+        return;
+      }
+      persistStudents([...students, ...created]);
+      created.forEach(c=>{ const g=groups.find(x=>x.id===c.groupId); queueAutoNotification('registration', c, {groupName: g?g.name:''}); });
+      if(failed.length>0){
+        alert(`اتسجل الطالب في: ${created.map(c=>c.subject).join('، ')}\nلكن مفيش مجموعة متاحة حاليًا لـ: ${failed.join('، ')} — أنشئها من "المجموعات والمدرسين" وأضف الطالب فيها يدوي بعدين.`);
+      }
+      setEditing(null);
+      return;
+    }
     const exists = students.some(s=>s.id===clean.id);
     if(exists){
       persistStudents(students.map(s=>s.id===clean.id?clean:s));
@@ -1659,7 +1696,8 @@ function StudentsTab({students,groups,persistStudents,payments,persistPayments,c
 
   const setNotebookField = (student, field, paid) => {
     persistStudents(students.map(s=> s.id===student.id ? {...s, [field]: {
-      paid, amount: field==='notebooksExplain'?NOTEBOOKS_EXPLAIN_FEE:NOTEBOOKS_REVIEW_FEE,
+      paid,
+      amount: (s[field] && s[field].amount!=null && s[field].amount!=='') ? s[field].amount : (field==='notebooksExplain'?NOTEBOOKS_EXPLAIN_FEE:NOTEBOOKS_REVIEW_FEE),
       paidAt: paid ? new Date().toISOString() : null, paidBy: paid ? recipientLabel() : null,
     }} : s));
   };
@@ -1682,16 +1720,18 @@ function StudentsTab({students,groups,persistStudents,payments,persistPayments,c
       <div className="card">
         {filtered.length===0 ? <Empty icon="👤" text="لا يوجد طلاب مطابقين — أضف طالب جديد من الأعلى" /> : (
           <table>
-            <thead><tr><th>الطالب</th><th>المجموعة</th><th>المستوى</th><th>هاتف ولي الأمر</th><th>نسبة الحضور</th><th>سداد {monthLabel(currentMonth)}</th><th>المذكرات</th><th>الحالة</th><th></th></tr></thead>
+            <thead><tr><th>الطالب</th><th>المادة</th><th>المجموعة</th><th>المستوى</th><th>هاتف ولي الأمر</th><th>نسبة الحضور</th><th>سداد {monthLabel(currentMonth)}</th><th>المذكرات</th><th>الحالة</th><th></th></tr></thead>
             <tbody>
               {filtered.map(s=>{
                 const g = groupById(s.groupId);
                 const rate = attendanceRate(s.id);
                 const monthRec = payments.find(p=>p.studentId===s.id && p.month===currentMonth);
                 const frozen = s.status==='frozen';
+                const subjectLabel = s.subject || (g && teachers.find(t=>t.id===g.teacherId)?.subject) || '—';
                 return (
                   <tr key={s.id} style={frozen?{opacity:0.6}:{}}>
                     <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
+                    <td><span className="badge badge-blue">{subjectLabel}</span></td>
                     <td>{g?g.name:<span className="muted">بدون مجموعة</span>}</td>
                     <td>{s.stage}</td>
                     <td>{s.parentPhone||'—'}</td>
@@ -1703,11 +1743,11 @@ function StudentsTab({students,groups,persistStudents,payments,persistPayments,c
                     </td>
                     <td>
                       <FeeCell label="شرح" phone={s.parentPhone} name={s.name} feeName="مصروفات مذكرات الشرح"
-                        amount={NOTEBOOKS_EXPLAIN_FEE} feeObj={s.notebooksExplain}
+                        amount={(s.notebooksExplain&&s.notebooksExplain.amount!=null)?s.notebooksExplain.amount:NOTEBOOKS_EXPLAIN_FEE} feeObj={s.notebooksExplain}
                         onMarkPaid={()=>setNotebookField(s,'notebooksExplain',true)}
                         onUnmark={()=>setNotebookField(s,'notebooksExplain',false)} isAdmin={isAdmin} />
                       <FeeCell label="مراجعة" phone={s.parentPhone} name={s.name} feeName="مصروفات مذكرات المراجعة"
-                        amount={NOTEBOOKS_REVIEW_FEE} feeObj={s.notebooksReview}
+                        amount={(s.notebooksReview&&s.notebooksReview.amount!=null)?s.notebooksReview.amount:NOTEBOOKS_REVIEW_FEE} feeObj={s.notebooksReview}
                         onMarkPaid={()=>setNotebookField(s,'notebooksReview',true)}
                         onUnmark={()=>setNotebookField(s,'notebooksReview',false)} isAdmin={isAdmin} />
                     </td>
@@ -1737,8 +1777,9 @@ function StudentsTab({students,groups,persistStudents,payments,persistPayments,c
 }
 
 function StudentForm({student,groups,onCancel,onSave}){
-  const [f,setF] = useState(student);
+  const [f,setF] = useState({...student, subjects: student.subjects || (student.subject?[student.subject]:[])});
   const set = (k,v)=>setF({...f,[k]:v});
+  const setFee = (field,key,v)=>setF({...f,[field]:{...(f[field]||{}), [key]:v}});
   const qrRef = React.useRef(null);
   const group = groups.find(g=>g.id===f.groupId);
 
@@ -1747,6 +1788,16 @@ function StudentForm({student,groups,onCancel,onSave}){
     qrRef.current.innerHTML = '';
     new QRCode(qrRef.current, {text: qrPayload(f.id), width:90, height:90, colorDark:'#221e1c', colorLight:'#ffffff'});
   },[f.id]);
+
+  const toggleSubject = (subj) => {
+    const has = f.subjects.includes(subj);
+    set('subjects', has ? f.subjects.filter(x=>x!==subj) : [...f.subjects, subj]);
+  };
+
+  const missingGroupSubjects = student.isNew ? f.subjects.filter(subj=>{
+    const teacherId = SUBJECT_TEACHER_MAP[subj];
+    return !groups.some(g=>g.teacherId===teacherId && g.stage===f.stage);
+  }) : [];
 
   return (
     <div>
@@ -1772,22 +1823,61 @@ function StudentForm({student,groups,onCancel,onSave}){
           </select>
         </Field>
       </div>
-      <div className="grid grid-2">
-        <Field label="المرحلة الدراسية">
-          <select value={f.stage} onChange={e=>set('stage',e.target.value)}>
-            {STAGES.map(s=><option key={s} value={s}>{s}</option>)}
-          </select>
+      <Field label="المرحلة الدراسية">
+        <select value={f.stage} onChange={e=>set('stage',e.target.value)}>
+          {STAGES.map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+      </Field>
+
+      {student.isNew ? (
+        <Field label="المواد المسجل فيها الطالب (تقدر تختار أكتر من مادة)">
+          <div style={{display:'flex',gap:14,flexWrap:'wrap',padding:'4px 2px'}}>
+            {SUBJECT_OPTIONS.map(subj=>(
+              <label key={subj} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontWeight:700,fontSize:14}}>
+                <input type="checkbox" checked={f.subjects.includes(subj)} onChange={()=>toggleSubject(subj)} />
+                {subj}
+              </label>
+            ))}
+          </div>
+          {f.subjects.length>0 && (
+            <div className="small muted" style={{marginTop:4}}>
+              هيتضاف سجل مستقل لكل مادة مختارة، ويترابط تلقائي بمجموعة نفس المدرس ونفس المرحلة.
+            </div>
+          )}
+          {missingGroupSubjects.length>0 && (
+            <div className="small" style={{marginTop:4,color:'var(--rose)'}}>
+              ⚠ لا توجد مجموعة بمرحلة "{f.stage}" لـ: {missingGroupSubjects.join('، ')} — أنشئها الأول من "المجموعات والمدرسين".
+            </div>
+          )}
         </Field>
+      ) : (
+        <Field label="المادة"><input value={f.subject||''} disabled style={{opacity:.6}} /></Field>
+      )}
+
+      {(!student.isNew || f.subjects.length===0) && (
         <Field label="المجموعة">
           <select value={f.groupId} onChange={e=>set('groupId',e.target.value)}>
             <option value="">بدون مجموعة</option>
             {groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
           </select>
         </Field>
+      )}
+
+      <div className="card" style={{background:'var(--cream)',marginTop:14,marginBottom:14}}>
+        <div style={{fontWeight:900,marginBottom:10}}>💰 مصروفات الطالب</div>
+        <div className="grid grid-3">
+          <Field label="مذكرات شرح (مرة واحدة)">
+            <input type="number" value={f.notebooksExplain?.amount ?? ''} onChange={e=>setFee('notebooksExplain','amount',e.target.value===''?'':Number(e.target.value))} placeholder={String(NOTEBOOKS_EXPLAIN_FEE)} />
+          </Field>
+          <Field label="مذكرات مراجعة (مرة واحدة)">
+            <input type="number" value={f.notebooksReview?.amount ?? ''} onChange={e=>setFee('notebooksReview','amount',e.target.value===''?'':Number(e.target.value))} placeholder={String(NOTEBOOKS_REVIEW_FEE)} />
+          </Field>
+          <Field label={`شهر — سيب فاضي لسعر المجموعة${group?' ('+fmtMoney(group.fee)+')':''}`}>
+            <input type="number" value={f.feeOverride} onChange={e=>set('feeOverride',e.target.value)} placeholder={group?String(group.fee):'0'} />
+          </Field>
+        </div>
       </div>
-      <Field label={`الاشتراك الشهري لهذا الطالب (ج.م) — سيب فاضي لاستخدام سعر المجموعة${group?' ('+fmtMoney(group.fee)+')':''}`}>
-        <input type="number" value={f.feeOverride} onChange={e=>set('feeOverride',e.target.value)} placeholder={group?String(group.fee):'0'} />
-      </Field>
+
       <Field label="تاريخ الالتحاق"><input type="date" value={f.joinDate} onChange={e=>set('joinDate',e.target.value)} /></Field>
       <Field label="ملاحظات"><textarea rows="3" value={f.notes} onChange={e=>set('notes',e.target.value)} placeholder="أي ملاحظات إضافية عن الطالب..." /></Field>
       <div className="modal-actions">
@@ -1900,10 +1990,29 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
 
 function GroupForm({group,teachers,onCancel,onSave}){
   const [f,setF] = useState(group);
+  const [lastAuto,setLastAuto] = useState(''); // آخر اسم اتولد تلقائي، عشان نعرف لو المستخدم عدّله بنفسه ميبقاش يتغير من تحته
   const set=(k,v)=>setF({...f,[k]:v});
+
+  const buildAutoName = (teacherId, stage) => {
+    const t = teachers.find(x=>x.id===teacherId);
+    if(!t || !stage) return '';
+    return `${stage} - ${t.subject} (${t.name})`;
+  };
+
+  useEffect(()=>{
+    const suggested = buildAutoName(f.teacherId, f.stage);
+    if(!suggested) return;
+    if(!f.name || f.name===lastAuto){
+      setF(prev=>({...prev, name: suggested}));
+      setLastAuto(suggested);
+    }
+  },[f.teacherId, f.stage]);
+
   return (
     <div>
-      <Field label="اسم المجموعة"><input value={f.name} onChange={e=>set('name',e.target.value)} placeholder="مثال: إعدادي 3 - إنجليزي - سبت/إثنين" /></Field>
+      <Field label="اسم المجموعة (بيتحدد تلقائي من المدرس والمرحلة، وتقدر تعدّله يدوي لو حابب)">
+        <input value={f.name} onChange={e=>set('name',e.target.value)} placeholder="مثال: إعدادي 3 - إنجليزي (مستر محمد سامي)" />
+      </Field>
       <div className="grid grid-2">
         <Field label="المدرس">
           <select value={f.teacherId} onChange={e=>set('teacherId',e.target.value)}>
