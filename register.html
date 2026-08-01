@@ -329,7 +329,7 @@ async function submitBooking(){
       if(enrollSnap.exists) throw new Error('DUP_PHONE');
       const rec = {
         name, stage, track, schoolName, studentPhone: spNorm, parentPhone: ppNorm,
-        schedule: stageCfg.schedule, createdAt: new Date().toISOString(),
+        schedule: stageCfg.schedule, groupLabel: `${stage} — ${stageCfg.schedule}`, createdAt: new Date().toISOString(),
         teacherId: TEACHER_ID, subject: SUBJECT_LABEL,
         confirmed:false, confirmedAt:null, confirmedBy:null, studentDocId:null,
       };
