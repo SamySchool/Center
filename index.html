@@ -335,11 +335,32 @@ const ENROLLMENT_2027_STAGES = [
 ];
 const NOTEBOOKS_EXPLAIN_FEE = 300; // مذكرات الشرح (الترم الأول) — القيمة الافتراضية، وتقدر تتغير لكل طالب لوحده
 const NOTEBOOKS_REVIEW_FEE = 250;  // مذكرات المراجعة (آخر الترم) — القيمة الافتراضية، وتقدر تتغير لكل طالب لوحده
+const TERM_START_MONTH = '2026-09'; // البداية الفعلية للدراسة — قبل الشهر ده محدش "متأخر" في مصروفات الشهر (المذكرات مستثناة، مطلوبة من الحجز)
+const INSTAPAY_LINK = 'https://ipn.eg/S/mosamy2030future/instapay/0In0d4';
+const VODAFONE_CASH_NUMBER = '01067734255';
+
+// رسالة تذكير واتساب لطلب حجز لسه ماتأكدش — بتذكّر بسعر مذكرات الشرح وطرق الدفع.
+const buildEnrollmentReminderLink = (enrollment) => {
+  const p = normalizeEgyptPhone(enrollment.parentPhone || enrollment.studentPhone);
+  if(!p) return null;
+  const lines = [
+    `مرحبًا 🌟`,
+    `تذكير بخصوص حجز *${enrollment.name}* — ${enrollment.stage}`,
+    `لإتمام الحجز، برجاء تحويل مصروفات المذكرات (${NOTEBOOKS_EXPLAIN_FEE} ج.م):`,
+    `- InstaPay: ${INSTAPAY_LINK}`,
+    `- فودافون كاش: ${VODAFONE_CASH_NUMBER}`,
+    ``,
+    `وبعد التحويل برجاء الرد على الرسالة دي للتأكيد 🙏`,
+    `SamySchool`,
+  ];
+  return `https://wa.me/${p}?text=${encodeURIComponent(lines.join('\n'))}`;
+};
 
 // عند إضافة طالب جديد وتحديد أكتر من مادة (إنجليزي/رياضيات/ألماني)، السستم بيعمل
 // سجل طالب منفصل لكل مادة ويربطه تلقائي بمجموعة نفس المدرس ونفس المرحلة.
 const SUBJECT_TEACHER_MAP = {'اللغة الإنجليزية':'t-samy', 'الرياضيات':'t-gouda', 'اللغة الألمانية':'t-amer'};
 const SUBJECT_OPTIONS = Object.keys(SUBJECT_TEACHER_MAP);
+const MOHAMED_TEACHER_ID = 't-samy'; // مجموعات المدرس ده بس هي اللي بتتزامن تلقائي مع "جدولي"
 
 // Generic manual-send WhatsApp link for fee reminders / payment receipts. Free — just opens
 // WhatsApp with the message ready; a human still has to press "send" themselves.
@@ -368,14 +389,20 @@ function buildFeeLink(kind, phone, name, feeName, amount, dateObj){
 
 // Small reusable "fee status + actions" chip: shows paid/unpaid, a 🔔 reminder link when unpaid,
 // a ✔ mark-as-paid button, and a 🧾 WhatsApp receipt link once paid.
-function FeeCell({label, phone, name, feeName, amount, feeObj, onMarkPaid, onUnmark, isAdmin}){
+function FeeCell({label, phone, name, feeName, amount, feeObj, onMarkPaid, onUnmark, isAdmin, notDueYet}){
   const paid = !!(feeObj && feeObj.paid);
-  const reminderLink = !paid ? buildFeeLink('reminder', phone, name, feeName, amount) : null;
+  const reminderLink = (!paid && !notDueYet) ? buildFeeLink('reminder', phone, name, feeName, amount) : null;
   const paidAtObj = feeObj && feeObj.paidAt ? new Date(feeObj.paidAt) : new Date();
   const receiptLink = paid ? buildFeeLink('receipt', phone, name, feeName, amount, paidAtObj) : null;
   return (
     <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:4,flexWrap:'wrap'}}>
-      <span className={"badge "+(paid?'badge-green':'badge-rose')} style={{fontSize:11}}>{label}: {paid?'مدفوع':'غير مدفوع'}</span>
+      {paid ? (
+        <span className="badge badge-green" style={{fontSize:11}}>{label}: مدفوع</span>
+      ) : notDueYet ? (
+        <span className="badge badge-gray" style={{fontSize:11}}>{label}: لسه معادوش</span>
+      ) : (
+        <span className="badge badge-rose" style={{fontSize:11}}>{label}: غير مدفوع</span>
+      )}
       {!paid && reminderLink && <a className="btn btn-ghost btn-sm" href={reminderLink} target="_blank" rel="noopener noreferrer" title="إرسال تذكير واتساب">🔔</a>}
       {!paid && onMarkPaid && <button className="btn btn-primary btn-sm" onClick={onMarkPaid} title="تسجيل السداد">✔</button>}
       {paid && receiptLink && <a className="btn btn-ghost btn-sm" href={receiptLink} target="_blank" rel="noopener noreferrer" title="إرسال إيصال واتساب">🧾</a>}
@@ -1038,6 +1065,14 @@ function App(){
     }catch(err){ console.error(err); alert('اتسجل الطالب بنجاح، لكن حصل خطأ بسيط في تحديث حالة الاستمارة: '+err.message); }
   };
 
+  // حذف طلب حجز (سواء لسه منتظر تأكيد أو اتأكد قبل كده) — أدمن بس، مفروضة برضو في الواجهة.
+  const deleteEnrollment = async (enrollment) => {
+    if(!isAdmin) return;
+    if(!confirm(`تأكيد حذف طلب حجز "${enrollment.name}" نهائيًا؟`)) return;
+    try{ await db.collection('enrollments2027').doc(enrollment.id).delete(); }
+    catch(err){ console.error(err); alert('حصل خطأ أثناء الحذف: '+err.message); }
+  };
+
   // One-time auto-fix: mark the academy owner and apply the 70% commission to his
   // colleagues groups automatically, so the admin never has to click through this by hand.
   const migrationRanRef = React.useRef(false);
@@ -1081,6 +1116,7 @@ function App(){
 
   const currentMonth = monthKey();
   const overdueStudents = useMemo(()=>{
+    if(currentMonth < TERM_START_MONTH) return []; // لسه الترم مبدأش، مفيش حد "متأخر" في المصروفات الشهرية
     return students.filter(s=>{
       if(!s.groupId) return false;
       return !isPaid(s.id, currentMonth);
@@ -1211,11 +1247,9 @@ function App(){
     {id:'enrollments', label:'حجز الطلاب الجدد', icon:'📝'},
     {id:'groups', label:'المجموعات والمدرسين', icon:'👥'},
     {id:'attendance', label:'الحضور والغياب', icon:'✓'},
-    {id:'scan', label:'تسجيل حضور بالكود', icon:'▣'},
-    {id:'faces', label:'التعرف على الوجه', icon:'◎'},
     {id:'codes', label:'أكواد الطلاب', icon:'⌗'},
     {id:'grades', label:'الدرجات', icon:'✎'},
-    {id:'payments', label:'المصروفات', icon:'৳'},
+    {id:'payments', label:'مصروفات الطلاب', icon:'৳'},
     {id:'private', label:'الدروس الخصوصية', icon:'✦'},
     {id:'trash', label:'سلة المحذوفات', icon:'🗑'},
     {id:'secretaryActivity', label:'نشاط السكرتيرة', icon:'🛡'},
@@ -1237,7 +1271,11 @@ function App(){
           <button className="sidebar-close-btn" onClick={()=>setMobileNavOpen(false)} aria-label="إغلاق القائمة">✕</button>
         </div>
         <div className="nav">
-          {NAV.filter(n=> (n.id!=='accounting' && n.id!=='schedule' && n.id!=='secretaryActivity') || isAdmin).map(n=>(
+          {NAV.filter(n=> {
+            if(n.id==='accounting' || n.id==='schedule' || n.id==='secretaryActivity') return isAdmin;
+            if(n.id==='payments') return !isAdmin; // للأدمن، مصروفات الطلاب بقت جوه تبويب "الحسابات"
+            return true;
+          }).map(n=>(
             <button key={n.id} className={tab===n.id?'active':''} onClick={()=>{setTab(n.id); setMobileNavOpen(false);}}>
               <span className="nav-icon">{n.icon}</span>{n.label}
             </button>
@@ -1269,11 +1307,9 @@ function App(){
       <div className="main">
         {tab==='dashboard' && <Dashboard {...{students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab,isAdmin}} />}
         {tab==='students' && <StudentsTab {...{students,groups,teachers,persistStudents,payments,persistPayments,currentMonth,groupById,attendance,isAdmin,actorRef}} />}
-        {tab==='enrollments' && <EnrollmentsTab {...{enrollments,groups,confirmEnrollment,isAdmin}} />}
+        {tab==='enrollments' && <EnrollmentsTab {...{enrollments,groups,confirmEnrollment,deleteEnrollment,isAdmin}} />}
         {tab==='groups' && <GroupsTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin,actorRef}} />}
-        {tab==='attendance' && <AttendanceTab {...{groups,students,attendance,persistAttendance,studentsInGroup}} />}
-        {tab==='scan' && <ScanAttendanceTab {...{groups,students,attendance,persistAttendance,payments,groupById}} />}
-        {tab==='faces' && <FaceAttendanceTab {...{groups,students,persistStudents,attendance,persistAttendance,payments,groupById}} />}
+        {tab==='attendance' && <AttendanceTab {...{groups,students,attendance,persistAttendance,studentsInGroup,payments,groupById,persistStudents}} />}
         {tab==='codes' && <StudentCodesTab {...{students,groups,groupById}} />}
         {tab==='grades' && <GradesTab {...{groups,students,grades,persistGrades,studentsInGroup,isAdmin}} />}
         {tab==='payments' && <PaymentsTab {...{students,groups,payments,persistPayments,persistStudents,groupById,setReceiptData,isAdmin,refunds,persistRefunds,actorRef}} />}
@@ -1281,7 +1317,7 @@ function App(){
         {tab==='trash' && <TrashTab {...{isAdmin}} />}
         {tab==='secretaryActivity' && isAdmin && <SecretaryActivityReportTab />}
         {tab==='schedule' && isAdmin && <ScheduleTab />}
-        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}} />}
+        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,persistRefunds,teacherPayouts,persistTeacherPayouts,isAdmin,setReceiptData,actorRef}} />}
         {tab==='reports' && <ReportsTab {...{students,groups,attendance,grades,payments,groupById}} />}
       </div>
       </div>
@@ -1567,7 +1603,7 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
   );
 }
 
-function EnrollmentsTab({enrollments,groups,confirmEnrollment,isAdmin}){
+function EnrollmentsTab({enrollments,groups,confirmEnrollment,deleteEnrollment,isAdmin}){
   const [query,setQuery] = useState('');
   const [filterStage,setFilterStage] = useState('all');
   const [pickingGroupFor,setPickingGroupFor] = useState(null); // enrollment obj, when >1 matching group
@@ -1631,11 +1667,19 @@ function EnrollmentsTab({enrollments,groups,confirmEnrollment,isAdmin}){
                   <td className="small muted">{(e.createdAt||'').slice(0,16).replace('T',' ')}</td>
                   <td>{e.confirmed?<span className="badge badge-green">✅ تم التأكيد</span>:<span className="badge badge-amber">بانتظار التأكيد</span>}</td>
                   <td>
-                    {!e.confirmed && (
-                      <button className="btn btn-primary btn-sm" disabled={busyId===e.id} onClick={()=>handleConfirmClick(e)}>
-                        {busyId===e.id?'جارِ الإضافة...':'تم تأكيد الحجز'}
-                      </button>
-                    )}
+                    <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+                      {!e.confirmed && (
+                        <button className="btn btn-primary btn-sm" disabled={busyId===e.id} onClick={()=>handleConfirmClick(e)}>
+                          {busyId===e.id?'جارِ الإضافة...':'تم تأكيد الحجز'}
+                        </button>
+                      )}
+                      {!e.confirmed && (()=>{ const link = buildEnrollmentReminderLink(e); return link && (
+                        <a className="btn btn-ghost btn-sm" href={link} target="_blank" rel="noopener noreferrer" title="إرسال تذكير واتساب بتأكيد الحجز ودفع المذكرات">🔔</a>
+                      ); })()}
+                      {isAdmin && (
+                        <button className="btn btn-danger btn-sm" onClick={()=>deleteEnrollment(e)} title="حذف طلب الحجز">🗑</button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1792,7 +1836,7 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,persistP
                     <td>
                       <FeeCell label="الشهر" phone={s.parentPhone} name={s.name} feeName={`مصروفات شهر ${monthLabel(currentMonth)}`}
                         amount={studentFee(s,g)} feeObj={monthRec&&monthRec.paid?monthRec:null}
-                        onMarkPaid={()=>markMonthPaid(s)} isAdmin={isAdmin} />
+                        onMarkPaid={()=>markMonthPaid(s)} isAdmin={isAdmin} notDueYet={currentMonth < TERM_START_MONTH} />
                     </td>
                     <td>
                       <FeeCell label="شرح" phone={s.parentPhone} name={s.name} feeName="مصروفات مذكرات الشرح"
@@ -1945,12 +1989,30 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
   const [editingGroup,setEditingGroup] = useState(null);
   const [editingTeacher,setEditingTeacher] = useState(null);
 
-  const saveGroup = (data) => {
-    if(data.id) persistGroups(groups.map(g=>g.id===data.id?data:g));
-    else persistGroups([...groups,{...data,id:uid()}]);
+  const saveGroup = async (data) => {
+    const gid = data.id || uid();
+    const finalGroup = {...data, id:gid};
+    if(data.id) persistGroups(groups.map(g=>g.id===data.id?finalGroup:g));
+    else persistGroups([...groups, finalGroup]);
+    // مزامنة تلقائية مع جدول مستر محمد سامي الشخصي (تبويب "جدولي"):
+    // نفس id المجموعة بيتستخدم لمستند الموعد، فالتحديث بيبقى نفس المستند دايمًا (مفيش تكرار).
+    try{
+      if(finalGroup.teacherId===MOHAMED_TEACHER_ID){
+        await db.collection('scheduleEvents').doc(gid).set({
+          type:'center', name:finalGroup.name, area:'', link:'',
+          days:finalGroup.days||[], start:finalGroup.start||'16:00', duration:finalGroup.duration||60,
+        });
+      }else{
+        await db.collection('scheduleEvents').doc(gid).delete().catch(()=>{});
+      }
+    }catch(err){ console.error('schedule sync error', err); }
     setEditingGroup(null);
   };
-  const removeGroup = (g) => { if(confirm('تأكيد نقل المجموعة لسلة المحذوفات؟')) removeWithTrash('groups', g, groups, persistGroups, actorRef.current); };
+  const removeGroup = (g) => {
+    if(!confirm('تأكيد نقل المجموعة لسلة المحذوفات؟')) return;
+    removeWithTrash('groups', g, groups, persistGroups, actorRef.current);
+    db.collection('scheduleEvents').doc(g.id).delete().catch(()=>{});
+  };
 
   const saveTeacher = (data) => {
     if(data.id) persistTeachers(teachers.map(t=>t.id===data.id?data:t));
@@ -1967,7 +2029,7 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
         {isAdmin && (
           <div style={{display:'flex',gap:10}}>
             <button className="btn btn-ghost" onClick={()=>setEditingTeacher({id:null,name:'',subject:''})}>+ مدرس</button>
-            <button className="btn btn-primary" onClick={()=>setEditingGroup({id:null,name:'',teacherId:teachers[0]?teachers[0].id:'',stage:STAGES[0],schedule:'',fee:'',capacity:30,commissionPercent:70})}>+ مجموعة جديدة</button>
+            <button className="btn btn-primary" onClick={()=>setEditingGroup({id:null,name:'',teacherId:teachers[0]?teachers[0].id:'',stage:STAGES[0],days:[],start:'16:00',duration:60,fee:'',capacity:30,commissionPercent:70})}>+ مجموعة جديدة</button>
           </div>
         )}
       </div>
@@ -2042,9 +2104,10 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
 }
 
 function GroupForm({group,teachers,onCancel,onSave}){
-  const [f,setF] = useState(group);
+  const [f,setF] = useState({...group, days: group.days || [], start: group.start || '16:00', duration: group.duration || 60});
   const [lastAuto,setLastAuto] = useState(''); // آخر اسم اتولد تلقائي، عشان نعرف لو المستخدم عدّله بنفسه ميبقاش يتغير من تحته
   const set=(k,v)=>setF({...f,[k]:v});
+  const toggleDay = (d) => set('days', f.days.includes(d) ? f.days.filter(x=>x!==d) : [...f.days,d].sort());
 
   const buildAutoName = (teacherId, stage) => {
     const t = teachers.find(x=>x.id===teacherId);
@@ -2060,6 +2123,8 @@ function GroupForm({group,teachers,onCancel,onSave}){
       setLastAuto(suggested);
     }
   },[f.teacherId, f.stage]);
+
+  const isMohamed = f.teacherId === MOHAMED_TEACHER_ID;
 
   return (
     <div>
@@ -2078,14 +2143,39 @@ function GroupForm({group,teachers,onCancel,onSave}){
           </select>
         </Field>
       </div>
-      <Field label="موعد المجموعة"><input value={f.schedule} onChange={e=>set('schedule',e.target.value)} placeholder="مثال: سبت وإثنين 5-7 م" /></Field>
+      <Field label="أيام المجموعة">
+        <div className="chip-row">
+          {SCHED_DAY_SHORT.map((name,d)=>(
+            <div key={d} className={"chip "+(f.days.includes(d)?'active':'')} onClick={()=>toggleDay(d)}>{name}</div>
+          ))}
+        </div>
+      </Field>
+      <div className="grid grid-2">
+        <Field label="وقت البدء"><input type="time" value={f.start} onChange={e=>set('start',e.target.value)} /></Field>
+        <Field label="المدة الزمنية">
+          <select value={f.duration} onChange={e=>set('duration',Number(e.target.value))}>
+            <option value={60}>ساعة واحدة</option>
+            <option value={90}>ساعة ونصف</option>
+            <option value={120}>ساعتان</option>
+          </select>
+        </Field>
+      </div>
+      {isMohamed && (
+        <div className="small" style={{color:'var(--primary,#0D6EFD)',background:'rgba(13,110,253,.08)',borderRadius:10,padding:'8px 12px',marginTop:-6,marginBottom:14,fontWeight:700}}>
+          🔄 المجموعة دي هتتزامن تلقائي مع تبويب "جدولي" لمستر محمد سامي.
+        </div>
+      )}
       <div className="grid grid-2">
         <Field label="الاشتراك الشهري (ج.م)"><input type="number" value={f.fee} onChange={e=>set('fee',e.target.value)} placeholder="300" /></Field>
         <Field label="أقصى عدد للطلاب"><input type="number" value={f.capacity} onChange={e=>set('capacity',e.target.value)} placeholder="30" /></Field>
       </div>
       <Field label="نسبة المدرس من إيرادات المجموعة (%)"><input type="number" min="0" max="100" value={f.commissionPercent ?? 70} onChange={e=>set('commissionPercent',e.target.value)} placeholder="70" /></Field>
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المجموعة');return;} onSave({...f,fee:Number(f.fee)||0,capacity:Number(f.capacity)||30,commissionPercent:Number(f.commissionPercent ?? 70)}); }}>حفظ</button>
+        <button className="btn btn-primary" onClick={()=>{
+          if(!f.name.trim()){alert('أدخل اسم المجموعة');return;}
+          if(f.days.length===0){alert('اختر يوم واحد على الأقل لموعد المجموعة');return;}
+          onSave({...f, schedule: composeScheduleLabel(f.days,f.start), fee:Number(f.fee)||0, capacity:Number(f.capacity)||30, commissionPercent:Number(f.commissionPercent ?? 70)});
+        }}>حفظ</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
       </div>
     </div>
@@ -2112,7 +2202,30 @@ function TeacherForm({teacher,onCancel,onSave}){
   );
 }
 
-function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup}){
+// تبويب "الحضور والغياب" الرئيسي — بيجمع 3 طرق تسجيل حضور مختلفة كتبويبات فرعية
+// (يدوي، بمسح الكود، بالتعرف على الوجه)، وكلها ظاهرة للأدمن والسكرتيرة.
+function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup,payments,groupById,persistStudents}){
+  const [sub,setSub] = useState('manual');
+  const SUBS = [
+    {id:'manual', label:'تسجيل يدوي'},
+    {id:'scan', label:'تسجيل بالكود'},
+    {id:'faces', label:'التعرف على الوجه'},
+  ];
+  return (
+    <div>
+      <div className="chip-row" style={{marginBottom:16}}>
+        {SUBS.map(s=>(
+          <div key={s.id} className={"chip "+(sub===s.id?'active':'')} onClick={()=>setSub(s.id)}>{s.label}</div>
+        ))}
+      </div>
+      {sub==='manual' && <ManualAttendanceTab {...{groups,students,attendance,persistAttendance,studentsInGroup}} />}
+      {sub==='scan' && <ScanAttendanceTab {...{groups,students,attendance,persistAttendance,payments,groupById}} />}
+      {sub==='faces' && <FaceAttendanceTab {...{groups,students,persistStudents,attendance,persistAttendance,payments,groupById}} />}
+    </div>
+  );
+}
+
+function ManualAttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup}){
   const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
   const [date,setDate] = useState(todayISO());
   const [showHistory,setShowHistory] = useState(false);
@@ -2408,8 +2521,9 @@ function PaymentsTab({students,groups,payments,persistPayments,persistStudents,g
     }} : s));
   };
 
+  const termNotStarted = month < TERM_START_MONTH;
   const visibleList = list.filter(s=>{
-    if(!onlyOverdue) return true;
+    if(!onlyOverdue || termNotStarted) return true;
     const r = recordFor(s.id);
     return !(r && r.paid);
   });
@@ -2454,13 +2568,13 @@ function PaymentsTab({students,groups,payments,persistPayments,persistStudents,g
                     <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
                     <td>{g?g.name:'—'}</td>
                     <td>{fmtMoney(studentFee(s,g))}</td>
-                    <td>{paid?<span className="badge badge-green">تم السداد</span>:<span className="badge badge-rose">متأخر</span>}</td>
+                    <td>{paid?<span className="badge badge-green">تم السداد</span>:termNotStarted?<span className="badge badge-gray">لسه معاد الدفع ميجاش</span>:<span className="badge badge-rose">متأخر</span>}</td>
                     <td className="small muted">{paid && r.paidDate ? r.paidDate : '—'}</td>
                     <td>
                       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                         {(!paid || isAdmin) && <button className={"btn btn-sm "+(paid?'btn-ghost':'btn-primary')} onClick={()=>togglePaid(s)}>{paid?'إلغاء السداد':'تسجيل سداد'}</button>}
                         {paid && <button className="btn btn-ghost btn-sm" onClick={()=>printReceipt(s)}>🖶 إيصال</button>}
-                        {!paid && (()=>{ const link = buildFeeLink('reminder', s.parentPhone, s.name, `مصروفات شهر ${monthLabel(month)}`, studentFee(s,g)); return link && <a className="btn btn-ghost btn-sm" href={link} target="_blank" rel="noopener noreferrer" title="تذكير واتساب">🔔</a>; })()}
+                        {!paid && !termNotStarted && (()=>{ const link = buildFeeLink('reminder', s.parentPhone, s.name, `مصروفات شهر ${monthLabel(month)}`, studentFee(s,g)); return link && <a className="btn btn-ghost btn-sm" href={link} target="_blank" rel="noopener noreferrer" title="تذكير واتساب">🔔</a>; })()}
                         {paid && (()=>{ const link = buildFeeLink('receipt', s.parentPhone, s.name, `مصروفات شهر ${monthLabel(month)}`, r.amount, r.paidAt?new Date(r.paidAt):new Date()); return link && <a className="btn btn-ghost btn-sm" href={link} target="_blank" rel="noopener noreferrer" title="إرسال إيصال واتساب">🧾</a>; })()}
                         <button className="btn btn-ghost btn-sm" onClick={()=>setRefunding(s)}>↩ استرداد أموال</button>
                       </div>
@@ -2704,6 +2818,10 @@ const ONLINE_OPEN_START = 16*60, ONLINE_OPEN_LAST = 22*60;
 const schedTimeToMin = (t) => { const [h,m]=t.split(':').map(Number); return h*60+m; };
 const schedMinToTime = (min) => { const h=Math.floor(min/60), m=min%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`; };
 const schedFmt12 = (t) => { const [h,m]=t.split(':').map(Number); const p=h>=12?'م':'ص'; let hh=h%12; if(hh===0)hh=12; return `${hh}:${String(m).padStart(2,'0')} ${p}`; };
+const composeScheduleLabel = (days, start) => {
+  if(!days || days.length===0 || !start) return '';
+  return days.map(d=>SCHED_DAY_NAMES[d]).join(' و ') + ' - ' + schedFmt12(start);
+};
 const schedTypeLabel = (t) => ({school:'المدرسة',center:'مجموعة سنتر',online:'أونلاين',private:'خصوصي/منزلي'}[t]||t);
 
 // ---- Booking card (PNG) — drawn on a canvas, uses the same LOGO_SRC/brand colors as the rest of the app ----
@@ -3348,6 +3466,12 @@ function TrashTab({isAdmin}){
       const {id, ...rest} = item.data;
       await db.collection(item.collection).doc(id).set(rest);
       await db.collection('trash').doc(item.id).delete();
+      if(item.collection==='groups' && rest.teacherId===MOHAMED_TEACHER_ID){
+        await db.collection('scheduleEvents').doc(id).set({
+          type:'center', name:rest.name, area:'', link:'',
+          days:rest.days||[], start:rest.start||'16:00', duration:rest.duration||60,
+        }).catch(()=>{});
+      }
     }catch(err){ console.error(err); alert('حصل خطأ أثناء الاسترجاع: '+(err.message||'')); }
   };
   const purgeOne = async (item) => {
@@ -3444,7 +3568,7 @@ function teacherReportWaLink(teacher, reportText){
   return `https://wa.me/${phone}?text=${encodeURIComponent(reportText)}`;
 }
 
-function AccountingTab({teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}){
+function AccountingTab({teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,persistRefunds,teacherPayouts,persistTeacherPayouts,isAdmin,setReceiptData,actorRef}){
   const [view,setView] = useState('expenses'); // expenses | shares | daily | treasury
   const [month,setMonth] = useState(currentMonth);
   const [day,setDay] = useState(todayISO());
@@ -3549,11 +3673,16 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
       </div>
 
       <div className="chip-row" style={{marginBottom:16}}>
+        <span className={"chip "+(view==='studentFees'?'active':'')} onClick={()=>setView('studentFees')}>💳 مصروفات الطلاب</span>
         <span className={"chip "+(view==='expenses'?'active':'')} onClick={()=>setView('expenses')}>مصروفات تشغيلية</span>
         <span className={"chip "+(view==='shares'?'active':'')} onClick={()=>setView('shares')}>نسب المدرسين وصافي الربح</span>
         <span className={"chip "+(view==='daily'?'active':'')} onClick={()=>setView('daily')}>تقرير يومي مفصل</span>
         <span className={"chip "+(view==='treasury'?'active':'')} onClick={()=>setView('treasury')}>💰 تقرير الخزينة</span>
       </div>
+
+      {view==='studentFees' && (
+        <PaymentsTab {...{students,groups,payments,persistPayments,persistStudents,groupById,setReceiptData,isAdmin,refunds,persistRefunds,actorRef}} />
+      )}
 
       {view==='expenses' && (
         <div>
