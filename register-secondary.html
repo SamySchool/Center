@@ -234,7 +234,7 @@
     </div>
 
     <div style="text-align:center; margin:6px 0 20px;">
-      <div style="font-family:'Poppins',sans-serif; font-weight:800; font-size:32px;">300 EGP</div>
+      <div id="feeAmountDisplay" style="font-family:'Poppins',sans-serif; font-weight:800; font-size:32px;">300 EGP</div>
       <div style="font-size:11px; letter-spacing:.14em; color:var(--muted);"><span class="en" dir="ltr">NOTEBOOKS FEE</span> — <span class="ar" dir="rtl">مصاريف المذكرات</span></div>
     </div>
 
@@ -279,18 +279,18 @@ const db = firebase.firestore();
 const TEACHER_ID = 't-samy';
 const SUBJECT_LABEL = 'اللغة الإنجليزية';
 const STAGES_SEC = {
-  'ثانوي 1': {en:'Secondary 1', groups:[
+  'ثانوي 1': {en:'Secondary 1', notebooksFee:300, groups:[
     {id:'A', label:'المجموعة A — السبت والثلاثاء 8:00 م', labelEn:'Group A — Sat & Tue, 8:00 PM', schedule:'السبت والثلاثاء - 8:00 م'},
     {id:'B', label:'المجموعة B — الاثنين والخميس 3:00 عصرًا', labelEn:'Group B — Mon & Thu, 3:00 PM', schedule:'الاثنين والخميس - 3:00 م'},
   ]},
-  'ثانوي 2': {en:'Secondary 2 (IGCSE)', groups:[
+  'ثانوي 2': {en:'Secondary 2 (IGCSE)', notebooksFee:600, groups:[
     {id:'single', label:'بكالوريا — الأحد والأربعاء 4:00 م (ساعتان)', labelEn:'IGCSE — Sun & Wed, 4:00 PM (2 hours)', schedule:'الأحد والأربعاء - 4:00 م'},
   ]},
-  'ثانوي 3': {en:'Secondary 3 (General)', groups:[
+  'ثانوي 3': {en:'Secondary 3 (General)', notebooksFee:600, groups:[
     {id:'single', label:'عام — الأحد والأربعاء 6:00 م (ساعتان)', labelEn:'General — Sun & Wed, 6:00 PM (2 hours)', schedule:'الأحد والأربعاء - 6:00 م'},
   ]},
 };
-const NOTEBOOKS_FEE = 300;
+const NOTEBOOKS_FEE_DEFAULT = 300; // احتياطي بس، الأصل إن كل مرحلة ليها سعرها في STAGES_SEC
 const MOHAMED_WHATSAPP = '01500044047';
 const INSTAPAY_LINK = 'https://ipn.eg/S/mosamy2030future/instapay/0In0d4';
 let selectedGroupId = null;
@@ -401,6 +401,9 @@ async function submitBooking(){
 function showSuccess(record, stageCfg){
   document.getElementById('formView').style.display='none';
   document.getElementById('successView').style.display='block';
+
+  const fee = stageCfg.notebooksFee || NOTEBOOKS_FEE_DEFAULT;
+  document.getElementById('feeAmountDisplay').textContent = fee + ' EGP';
 
   document.getElementById('ticketName').textContent = record.name;
   document.getElementById('ticketDetails').innerHTML = `
