@@ -343,9 +343,12 @@ const normalizeEgyptPhone = (phone) => {
 // ---- Public enrollment form (حجز الطلاب الجدد 2026/2027) — stage/schedule/code-range config ----
 // Kept here (not just in register.html) so the admin app can show the same schedule text.
 const ENROLLMENT_2027_STAGES = [
-  {stage:'إعدادي 1', schedule:'الإثنين والخميس - 4:00 م', codeMin:10, codeMax:30},
-  {stage:'إعدادي 2', schedule:'السبت والثلاثاء - 3:30 م', codeMin:31, codeMax:50},
-  {stage:'إعدادي 3', schedule:'الإثنين والخميس - 6:00 م', codeMin:51, codeMax:70},
+  {stage:'إعدادي 1', schedule:'الإثنين والخميس - 4:00 م'},
+  {stage:'إعدادي 2', schedule:'السبت والثلاثاء - 3:30 م'},
+  {stage:'إعدادي 3', schedule:'الإثنين والخميس - 6:00 م'},
+  {stage:'ثانوي 1', schedule:'مجموعتين للاختيار'},
+  {stage:'ثانوي 2', schedule:'الأحد والأربعاء - 4:00 م'},
+  {stage:'ثانوي 3', schedule:'الأحد والأربعاء - 6:00 م'},
 ];
 const NOTEBOOKS_EXPLAIN_FEE = 300; // مذكرات الشرح (الترم الأول) — القيمة الافتراضية، وتقدر تتغير لكل طالب لوحده
 const NOTEBOOKS_REVIEW_FEE = 250;  // مذكرات المراجعة (آخر الترم) — القيمة الافتراضية، وتقدر تتغير لكل طالب لوحده
@@ -360,13 +363,14 @@ const buildEnrollmentReminderLink = (enrollment) => {
   const lines = [
     `مرحبًا 🌟`,
     `تذكير بخصوص حجز *${enrollment.name}* — ${enrollment.stage}`,
+    enrollment.groupLabel ? `المجموعة: ${enrollment.groupLabel}` : null,
     `لإتمام الحجز، برجاء تحويل مصروفات المذكرات (${NOTEBOOKS_EXPLAIN_FEE} ج.م):`,
     `- InstaPay: ${INSTAPAY_LINK}`,
     `- فودافون كاش: ${VODAFONE_CASH_NUMBER}`,
     ``,
     `وبعد التحويل برجاء الرد على الرسالة دي للتأكيد 🙏`,
     `SamySchool`,
-  ];
+  ].filter(Boolean);
   return `https://wa.me/${p}?text=${encodeURIComponent(lines.join('\n'))}`;
 };
 
@@ -1667,13 +1671,14 @@ function EnrollmentsTab({enrollments,groups,confirmEnrollment,deleteEnrollment,i
       <div className="card">
         {filtered.length===0 ? <Empty icon="📝" text="لا توجد طلبات حجز مطابقة" /> : (
           <table>
-            <thead><tr><th>الاسم</th><th>المادة</th><th>المرحلة</th><th>المسار</th><th>المدرسة</th><th>هاتف الطالب</th><th>هاتف ولي الأمر</th><th>تاريخ التسجيل</th><th>الحالة</th><th></th></tr></thead>
+            <thead><tr><th>الاسم</th><th>المادة</th><th>المرحلة</th><th>المجموعة</th><th>المسار</th><th>المدرسة</th><th>هاتف الطالب</th><th>هاتف ولي الأمر</th><th>تاريخ التسجيل</th><th>الحالة</th><th></th></tr></thead>
             <tbody>
               {filtered.map(e=>(
                 <tr key={e.id}>
                   <td>{e.name}</td>
                   <td><span className="badge badge-blue">{e.subject || 'اللغة الإنجليزية'}</span></td>
                   <td>{e.stage}</td>
+                  <td className="small">{e.groupLabel || e.schedule || '—'}</td>
                   <td>{e.track}</td>
                   <td className="small muted">{e.schoolName}</td>
                   <td className="small">{e.studentPhone}</td>
@@ -1706,6 +1711,7 @@ function EnrollmentsTab({enrollments,groups,confirmEnrollment,deleteEnrollment,i
         <div className="modal-overlay" onClick={()=>setPickingGroupFor(null)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <h3>اختر المجموعة المناسبة لـ {pickingGroupFor.name}</h3>
+            {pickingGroupFor.groupLabel && <div className="small" style={{color:'var(--primary,#0D6EFD)',fontWeight:800,marginTop:6}}>الطالب اختار وقت الحجز: {pickingGroupFor.groupLabel}</div>}
             <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:12}}>
               {groups.filter(g=>g.stage===pickingGroupFor.stage && g.teacherId===(pickingGroupFor.teacherId||'t-samy')).map(g=>(
                 <button key={g.id} className="btn btn-ghost" onClick={()=>doConfirm(pickingGroupFor,g)}>{g.name} — {g.schedule||''}</button>
