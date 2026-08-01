@@ -170,14 +170,28 @@ label{font-size:12.5px; font-weight:700; color:var(--muted); display:block; marg
 .receipt-print{background:#fff; width:280px; padding:18px; border-radius:10px; font-size:12.5px;}
 .receipt-line{display:flex; justify-content:space-between; padding:4px 0; font-size:12.5px;}
 .receipt-dashed{border-top:1.5px dashed #ccc; margin:8px 0;}
+@page{ size:A4 landscape; margin:10mm; }
+@page thermal{ size:80mm auto; margin:4mm; }
+.receipt-print{ page:thermal; }
+
 @media print{
   .sidebar,.topbar,.toolbar,.no-print,.app-header{display:none !important;}
   .main{padding:0;}
   .print-only{display:block;}
   body{background:#fff;}
   .receipt-print{width:72mm; margin:0 auto; box-shadow:none;}
-  @page{size:80mm auto; margin:4mm;}
+
+  /* جدولي — نطبع القائمة النظيفة بس، مش شبكة الشاشة (اللي مصممة تتقص وتتزنّق في مساحة صغيرة) */
+  .sch-header, .sch-viewtoggle, .sch-grid-wrap, .chip-row, .sch-slot-day{display:none !important;}
+  .print-schedule{display:block !important;}
 }
+.print-schedule{display:none;}
+.print-schedule h2{font-size:18px; margin:0 0 14px;}
+.print-sch-day{margin-bottom:18px; break-inside:avoid;}
+.print-sch-day h3{font-size:14px; font-weight:900; background:#f0ebe4; padding:6px 10px; border-radius:6px; margin:0 0 6px;}
+.print-sch-day table{width:100%; border-collapse:collapse; font-size:12px;}
+.print-sch-day th{text-align:right; border-bottom:1.5px solid #221e1c; padding:5px 8px; font-size:11px;}
+.print-sch-day td{border-bottom:1px solid #e2ddcf; padding:6px 8px; vertical-align:top;}
 ::-webkit-scrollbar{width:8px; height:8px;}
 ::-webkit-scrollbar-thumb{background:#d8cec2; border-radius:8px;}
 
@@ -2808,7 +2822,7 @@ const SCHED_DAY_SHORT = ["أحد","اثنين","ثلاثاء","أربعاء","خ
 const SCHED_GRID_START = 7*60, SCHED_GRID_END = 23*60;
 const SCHOOL_DAYS = [0,1,2,3,4];
 const SCHOOL_START_T = "07:30", SCHOOL_END_T = "15:15";
-const CENTER_DAYS = [0,1,3,4];
+const CENTER_DAYS = [0,1,2,3,4,5,6]; // كل الأيام بقت متاحة للسنتر من 2026-08
 const CENTER_START = 16*60, CENTER_LAST = 20*60;
 const ONLINE_RESTRICTED_DAYS = [0,1,3,4];
 const ONLINE_RESTRICTED_START = 21*60, ONLINE_RESTRICTED_LAST = 22*60;
@@ -3189,6 +3203,7 @@ function ScheduleTab(){
         <div><h1>جدولي الأسبوعي</h1><div className="date">المدرسة، السنتر، الأونلاين، والخصوصي في مكان واحد</div></div>
         <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
           <button className="btn btn-ghost btn-sm" disabled={gcalStatus==='syncing'} onClick={doGoogleSync}>{gcalStatus==='syncing'?'⏳ جاري المزامنة...':'📆 مزامنة مع Google Calendar'}</button>
+          <button className="btn btn-ghost btn-sm no-print" onClick={()=>window.print()}>🖶 طباعة الجدول</button>
           <button className="btn btn-ghost btn-sm" onClick={resetAll}>تفريغ الجدول</button>
           <button className="btn btn-primary" onClick={()=>setEditing({id:null,type:'center',name:'',area:'',link:'',days:[],start:'16:00',duration:60})}>+ إضافة موعد</button>
         </div>
@@ -3243,7 +3258,7 @@ function ScheduleTab(){
           </div>
           <div className="small muted" style={{marginBottom:14,lineHeight:1.9}}>
             {slotTab==='center'
-              ? 'السنتر متاح فقط الأحد والاثنين والأربعاء والخميس، من 4 إلى 8 مساءً. الثلاثاء والسبت غير متاحين لأن مدرّس آخر مستأجر المكان.'
+              ? 'السنتر متاح كل أيام الأسبوع من 4 إلى 8 مساءً.'
               : 'الأونلاين والخصوصي: الأحد والاثنين والأربعاء والخميس من 9 مساءً. الثلاثاء والجمعة والسبت من 4 لـ 10 مساءً.'}
           </div>
           <div style={{display:'flex',flexDirection:'column',gap:12}}>
@@ -3275,6 +3290,33 @@ function ScheduleTab(){
           <ScheduleForm event={editing} onCancel={()=>setEditing(null)} onSave={save} onDelete={editing.id?()=>remove(editing.id):null} allEvents={allEvents} />
         </Modal>
       )}
+
+      {/* نسخة الطباعة — قائمة نظيفة بكل يوم لوحده، بدون قص أو تكديس نصوص (بدل شبكة الشاشة اللي مصممة للعرض بس) */}
+      <div className="print-schedule">
+        <h2>جدول مستر محمد سامي الأسبوعي</h2>
+        {SCHED_DAY_NAMES.map((dayName,d)=>{
+          const dayOccs = filteredOccs.filter(o=>o.day===d).sort((a,b)=>a.startMin-b.startMin);
+          if(dayOccs.length===0) return null;
+          return (
+            <div key={d} className="print-sch-day">
+              <h3>{dayName}</h3>
+              <table>
+                <thead><tr><th>الميعاد</th><th>الاسم</th><th>النوع</th><th>تفاصيل</th></tr></thead>
+                <tbody>
+                  {dayOccs.map(o=>(
+                    <tr key={o.id+'_'+o.day}>
+                      <td>{schedFmt12(o.start)} – {schedFmt12(schedMinToTime(o.endMin))}</td>
+                      <td>{o.name}</td>
+                      <td>{o.type==='school'?'المدرسة':o.type==='center'?'السنتر':o.type==='online'?'أونلاين':'خصوصي'}</td>
+                      <td>{o.area || o.link || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
