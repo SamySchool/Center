@@ -413,7 +413,7 @@ const platformAuth = platformApp.auth();
 const platformDb = platformApp.firestore();
 
 const PLATFORM_ANDROID_URL = 'https://play.google.com/store/apps/details?id=io.github.samyschool.twa&pcampaignid=web_share';
-const PLATFORM_WEB_URL = 'https://samyschool.github.io/samyschool/admin.html';
+const PLATFORM_WEB_URL = 'https://samyschool.github.io/samyschool/';
 
 function stageTrackCandidates(stage){
   const map = {
@@ -500,10 +500,13 @@ function buildPlatformWhatsAppLink(student){
     ``,
     `🔑 كود تفعيل المنصة: *${student.platformCode}*`,
     ``,
-    `📱 تنزيل تطبيق SamySchool للموبايل:`,
+    `📱 لمستخدمي Android — تنزيل تطبيق SamySchool:`,
     PLATFORM_ANDROID_URL,
     ``,
-    `💻 الدخول من اللاب أو الكمبيوتر:`,
+    `🍎 لمستخدمي iPhone — الدخول على المنصة من الرابط:`,
+    PLATFORM_WEB_URL,
+    ``,
+    `💻 للدخول من اللاب أو الكمبيوتر:`,
     PLATFORM_WEB_URL,
     ``,
     `الكود خاص بالطالب، احتفظ به ولا تشاركه مع شخص آخر.`,
