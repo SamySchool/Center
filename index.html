@@ -2535,14 +2535,22 @@ function normalizeNotebookStatus(student){
   return {due, paid, remaining: Math.max(0,due-paid), isPaid: due<=0 ? true : paid>=due};
 }
 
-// Scans the last `monthsBack` months (default 6) for this student and returns the ones that
-// still have a balance due — powers the comprehensive reminder ("any unpaid month or
-// notebook", not just whichever month happens to be selected on screen).
+// The school year at the center started 1 September 2026 — nothing before that is tuition.
+// Any payment recorded earlier than this was actually a holiday notebook-reservation deposit
+// for Mr. Mohamed Samy's English notebooks, not a monthly subscription, so every month-based
+// calculation below (reminders, confirmations, the 6-month finance history) is clamped to
+// never reach back past this month, no matter how many months back it would otherwise scan.
+const TERM_START_MONTH = '2026-09';
+
+// Scans back from today to TERM_START_MONTH (capped at `monthsBack` months) for this student
+// and returns the ones that still have a balance due — powers the comprehensive reminder
+// ("any unpaid month or notebook", not just whichever month happens to be selected on screen).
 function studentUnpaidMonths(student, group, payments, monthsBack=6){
   const out = [];
   const d = new Date();
   for(let i=0;i<monthsBack;i++){
     const mk = monthKey(d);
+    if(mk < TERM_START_MONTH) break;
     const due = studentFee(student, group);
     const norm = normalizePaymentRecord(payments.find(p=>p.studentId===student.id && p.month===mk), due);
     if(due>0 && !norm.paid) out.push({month:mk, due:norm.amountDue, paid:norm.amountPaid, remaining:norm.amountDue-norm.amountPaid});
@@ -2557,6 +2565,7 @@ function studentPaidMonths(student, group, payments, monthsBack=6){
   const d = new Date();
   for(let i=0;i<monthsBack;i++){
     const mk = monthKey(d);
+    if(mk < TERM_START_MONTH) break;
     const due = studentFee(student, group);
     const norm = normalizePaymentRecord(payments.find(p=>p.studentId===student.id && p.month===mk), due);
     if(norm.amountPaid>0) out.push({month:mk, due:norm.amountDue, paid:norm.amountPaid, full:norm.paid});
@@ -2946,12 +2955,18 @@ function NotebookPaymentForm({student,onCancel,onSave,onReset}){
   );
 }
 
-// Full per-student financial picture: notebook status (owner's students only) + last 6
-// months of tuition, each with its own quick reminder button.
+// Full per-student financial picture: notebook status (owner's students only) + tuition
+// history since the term started (never further back — see TERM_START_MONTH), each with
+// its own quick reminder button.
 function StudentFinanceDetail({student,group,teacher,isOwnerStudent,payments,persistStudents,students,onClose}){
   const months = [];
   const d = new Date();
-  for(let i=0;i<6;i++){ months.push(monthKey(d)); d.setMonth(d.getMonth()-1); }
+  for(let i=0;i<6;i++){
+    const mk = monthKey(d);
+    if(mk < TERM_START_MONTH) break;
+    months.push(mk);
+    d.setMonth(d.getMonth()-1);
+  }
   const nb = normalizeNotebookStatus(student);
 
   return (
@@ -2962,7 +2977,7 @@ function StudentFinanceDetail({student,group,teacher,isOwnerStudent,payments,per
           <div className="small">{fmtMoney(nb.due)} — مدفوع {fmtMoney(nb.paid)}{nb.isPaid?` (بتاريخ ${student.notebookPaidDate||''})`:` — متبقي ${fmtMoney(nb.remaining)}`}</div>
         </div>
       )}
-      <div className="section-title">آخر 6 شهور</div>
+      <div className="section-title">من بداية الدراسة (سبتمبر 2026)</div>
       <table>
         <thead><tr><th>الشهر</th><th>المطلوب</th><th>المدفوع</th><th>الحالة</th></tr></thead>
         <tbody>
