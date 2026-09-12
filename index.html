@@ -1461,7 +1461,7 @@ function App(){
         {tab==='trash' && <TrashTab {...{isAdmin}} />}
         {tab==='secretaryActivity' && isAdmin && <SecretaryActivityReportTab />}
         {tab==='schedule' && isAdmin && <ScheduleTab />}
-        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}} />}
+        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}} />}
         {tab==='reports' && <ReportsTab {...{students,groups,teachers,attendance,grades,payments,groupById}} />}
       </div>
       </div>
@@ -2695,10 +2695,11 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
     persistPayments(payments.map(p=>p.id===existing.id?{...p, amountPaid:0, amount:0, paid:false, paidDate:null, paidAt:null, paidBy:null}:p));
   };
 
-  const recordNotebookPayment = (student, amountToAdd) => {
+  const recordNotebookPayment = (student, amountToAdd, dueOverride) => {
     const nb = normalizeNotebookStatus(student);
+    const due = dueOverride!==undefined ? dueOverride : nb.due;
     const newPaid = nb.paid + amountToAdd;
-    persistStudents(students.map(s=>s.id===student.id?{...s, notebookAmountPaid:newPaid, notebookPaid: newPaid>=nb.due, notebookPaidDate:todayISO()}:s));
+    persistStudents(students.map(s=>s.id===student.id?{...s, notebookFeeAmount:due, notebookAmountPaid:newPaid, notebookPaid: due>0 && newPaid>=due, notebookPaidDate: amountToAdd>0?todayISO():s.notebookPaidDate}:s));
     setNotebookPayFor(null);
   };
   const resetNotebookPayment = (student) => {
@@ -2789,7 +2790,9 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
                     <td style={{color:'var(--green)',fontWeight:700}}>{fmtMoney(norm.amountPaid)}</td>
                     <td>{remaining>0 ? <span className="badge badge-rose">{fmtMoney(remaining)}</span> : <span className="badge badge-green">تم السداد</span>}</td>
                     <td>
-                      {!owner ? <span className="small muted">—</span> : nb.due<=0 ? <span className="small muted">لا يوجد</span> : (
+                      {!owner ? <span className="small muted">—</span> : nb.due<=0 ? (
+                        <button className="btn btn-ghost btn-sm" onClick={()=>setNotebookPayFor(s)}>➕ تحديد سعر المذكرة</button>
+                      ) : (
                         <button className={"btn btn-sm "+(nb.isPaid?'btn-ghost':'btn-danger')} onClick={()=>setNotebookPayFor(s)}>
                           {nb.isPaid?'✓ مذكرة مدفوعة':nb.paid>0?`مذكرة ${fmtMoney(nb.remaining)} متبقي`:`مذكرة ${fmtMoney(nb.due)}`}
                         </button>
@@ -2886,7 +2889,7 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
           <NotebookPaymentForm
             student={notebookPayFor}
             onCancel={()=>setNotebookPayFor(null)}
-            onSave={(amt)=>recordNotebookPayment(notebookPayFor, amt)}
+            onSave={(amt,due)=>recordNotebookPayment(notebookPayFor, amt, due)}
             onReset={isAdmin?()=>{resetNotebookPayment(notebookPayFor); setNotebookPayFor(null);}:null}
           />
         </Modal>
@@ -2936,18 +2939,24 @@ function PartialPaymentForm({student,due,paidSoFar,onCancel,onSave}){
 
 function NotebookPaymentForm({student,onCancel,onSave,onReset}){
   const nb = normalizeNotebookStatus(student);
-  const [amount,setAmount] = useState(String(nb.remaining||nb.due));
+  const [due,setDue] = useState(String(nb.due||''));
+  const [amount,setAmount] = useState(String(nb.remaining||nb.due||''));
   return (
     <div>
+      <Field label="سعر المذكرة (تقدر تطبق أي خصم هنا مباشرة)"><input type="number" value={due} onChange={e=>setDue(e.target.value)} placeholder="مثال: 150" /></Field>
       <div className="grid grid-3" style={{marginBottom:14}}>
-        <div><div className="small muted">سعر المذكرة</div><div style={{fontWeight:800}}>{fmtMoney(nb.due)}</div></div>
-        <div><div className="small muted">المدفوع</div><div style={{fontWeight:800,color:'var(--green)'}}>{fmtMoney(nb.paid)}</div></div>
-        <div><div className="small muted">المتبقي</div><div style={{fontWeight:800,color:'var(--rose)'}}>{fmtMoney(nb.remaining)}</div></div>
+        <div><div className="small muted">السعر الحالي</div><div style={{fontWeight:800}}>{fmtMoney(nb.due)}</div></div>
+        <div><div className="small muted">المدفوع سابقًا</div><div style={{fontWeight:800,color:'var(--green)'}}>{fmtMoney(nb.paid)}</div></div>
+        <div><div className="small muted">المتبقي حاليًا</div><div style={{fontWeight:800,color:'var(--rose)'}}>{fmtMoney(nb.remaining)}</div></div>
       </div>
-      <Field label="المبلغ المدفوع الآن (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder={String(nb.remaining)} /></Field>
-      <div className="small muted" style={{marginBottom:14}}>سعر المذكرة نفسه (شامل أي خصم) بيتظبط من تبويب الطلاب — تعديل بيانات الطالب.</div>
+      <Field label="المبلغ المدفوع الآن (ج.م) — سيبه صفر لو بتعدّل السعر بس من غير تسجيل دفعة"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" /></Field>
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={()=>{ const n=Number(amount); if(!n||n<=0){alert('أدخل مبلغ صحيح');return;} onSave(n); }}>تسجيل الدفع</button>
+        <button className="btn btn-primary" onClick={()=>{
+          const dueN = Number(due)||0;
+          const amtN = Number(amount)||0;
+          if(dueN<=0){ alert('أدخل سعر المذكرة أولاً'); return; }
+          onSave(amtN, dueN);
+        }}>حفظ</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
         {onReset && nb.paid>0 && <button className="btn btn-danger" style={{marginRight:'auto'}} onClick={onReset}>إلغاء الدفع بالكامل</button>}
       </div>
@@ -4156,7 +4165,7 @@ function DailyCashTab({students,payments}){
   );
 }
 
-function AccountingTab({teachers,groups,students,attendance,payments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}){
+function AccountingTab({teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}){
   const [view,setView] = useState('expenses'); // expenses | shares | daily | treasury
   const [month,setMonth] = useState(currentMonth);
   const [day,setDay] = useState(todayISO());
@@ -4274,6 +4283,63 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
 
       {view==='notebooks' && (
         <div>
+          {(() => {
+            const preSept = payments
+              .filter(p=>p.month < TERM_START_MONTH && !p.reconciled)
+              .map(p=>({payment:p, student:students.find(s=>s.id===p.studentId)}))
+              .filter(x=>{
+                if(!x.student) return false;
+                const g = groupById(x.student.groupId);
+                const t = g ? teachers.find(tc=>tc.id===g.teacherId) : null;
+                return t && t.isOwner;
+              })
+              .sort((a,b)=>a.payment.month.localeCompare(b.payment.month));
+
+            const convertToNotebook = (payment, student) => {
+              const nb = normalizeNotebookStatus(student);
+              const addAmt = Number(payment.amount)||0;
+              const newPaid = nb.paid + addAmt;
+              const newDue = nb.due>0 ? nb.due : newPaid;
+              persistStudents(students.map(s=>s.id===student.id?{...s, notebookFeeAmount:newDue, notebookAmountPaid:newPaid, notebookPaid:newPaid>=newDue, notebookPaidDate:payment.paidDate||todayISO()}:s));
+              persistPayments(payments.map(p=>p.id===payment.id?{...p, reconciled:true, reconciledAs:'notebook'}:p));
+            };
+            const moveToSeptember = (payment) => {
+              persistPayments(payments.map(p=>p.id===payment.id?{...p, month:TERM_START_MONTH, reconciled:true, reconciledAs:'september_advance'}:p));
+            };
+            const dismissRecord = (payment) => {
+              persistPayments(payments.map(p=>p.id===payment.id?{...p, reconciled:true, reconciledAs:'ignored'}:p));
+            };
+
+            if(preSept.length===0) return null;
+            return (
+              <div className="card" style={{marginBottom:18, borderColor:'var(--amber)'}}>
+                <div className="section-title" style={{color:'var(--amber)'}}>🔍 مراجعة مدفوعات ما قبل سبتمبر 2026 ({preSept.length})</div>
+                <p className="small muted" style={{marginTop:-6,marginBottom:12}}>
+                  دي مدفوعات اتسجلت قبل بداية الدراسة الرسمية — راجع كل واحدة وحدد كانت إيه فعليًا. القيم اللي متعاملة معاها مش هتظهر هنا تاني.
+                </p>
+                <table>
+                  <thead><tr><th>الطالب</th><th>الشهر المسجل بيه</th><th>المبلغ</th><th></th></tr></thead>
+                  <tbody>
+                    {preSept.map(({payment,student})=>(
+                      <tr key={payment.id}>
+                        <td>{student.name}</td>
+                        <td className="small muted">{monthLabel(payment.month)}</td>
+                        <td style={{fontWeight:800}}>{fmtMoney(payment.amount)}</td>
+                        <td>
+                          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                            <button className="btn btn-primary btn-sm" onClick={()=>convertToNotebook(payment,student)}>📓 ده كان حجز مذكرة</button>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>moveToSeptember(payment)}>📅 دفعة مقدمة لشهر سبتمبر</button>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>dismissRecord(payment)}>🚫 تجاهل</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
           <div className="grid grid-2" style={{marginBottom:18}}>
             <div className="card"><div className="stat-label">إجمالي إيراد المذكرات (محصّل)</div><div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(notebookTotalRevenue)}</div></div>
             <div className="card"><div className="stat-label">عدد الطلاب اللي دفعوا (كامل أو جزئي)</div><div className="stat-value">{notebookPaidList.length} / {notebookStudents.length}</div></div>
