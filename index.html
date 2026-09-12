@@ -329,6 +329,16 @@ function attHomework(rec){
   if(rec==null || typeof rec === 'string') return null;
   return (rec.homework===undefined) ? null : rec.homework; // true | false | null
 }
+// Follow-up on an absence — set from the "غيابات اليوم" panel (contacted checkbox + reason
+// text) — read here so it flows through into the student's history and monthly report.
+function attContacted(rec){
+  if(rec==null || typeof rec === 'string') return false;
+  return !!rec.contacted;
+}
+function attReason(rec){
+  if(rec==null || typeof rec === 'string') return '';
+  return rec.reason || '';
+}
 
 const studentFee = (student, group) => {
   const ov = student && student.feeOverride;
@@ -391,6 +401,8 @@ function computeStudentMonthStats(student, month, attendance, grades, payments, 
       recitation: attRecitation(rec),
       recitationMax: attRecitationMax(rec),
       homework: attHomework(rec),
+      contacted: attContacted(rec),
+      reason: attReason(rec),
     };
   });
   const recitationSessions = sessions.filter(s=>s.recitation!==null);
@@ -427,6 +439,8 @@ function buildWhatsAppReportLink(student, month, stats, teacher){
         if(s.recitation!==null) parts.push(`تسميع ${s.recitation}/${s.recitationMax||'-'}`);
         if(s.homework===true) parts.push('واجب ✓');
         else if(s.homework===false) parts.push('واجب ✕');
+      }else if(s.reason){
+        parts.push(`السبب: ${s.reason}`);
       }
       lines.push(`• ${s.date}: ${parts.join(' — ')}`);
     });
@@ -2197,6 +2211,73 @@ function isEnglishSubject(teacher){
   return /english/i.test(s) || s.includes('انجلي') || s.includes('إنجلي');
 }
 
+// Cross-group view of everyone absent TODAY, regardless of which teacher/group — so the
+// secretary can work through one single follow-up checklist instead of hunting per group.
+// "تم التواصل" and the reason live on the same attendance record as the absence itself.
+function TodayAbsencesPanel({students,groups,teachers,attendance,persistAttendance,groupById}){
+  const today = todayISO();
+  const todaysDocs = attendance.filter(a=>a.date===today);
+
+  const rows = [];
+  todaysDocs.forEach(doc=>{
+    Object.entries(doc.records||{}).forEach(([studentId,rec])=>{
+      if(attStatus(rec)!=='absent') return;
+      const student = students.find(s=>s.id===studentId);
+      if(!student) return;
+      const group = groupById(doc.groupId);
+      const teacher = group ? teachers.find(t=>t.id===group.teacherId) : null;
+      rows.push({docId:doc.id, groupId:doc.groupId, studentId, student, group, teacher, rec: (typeof rec==='object'?rec:{status:rec})});
+    });
+  });
+  rows.sort((a,b)=> (a.teacher?.name||'').localeCompare(b.teacher?.name||''));
+
+  const toggleContacted = (row) => {
+    const doc = attendance.find(a=>a.id===row.docId);
+    if(!doc) return;
+    const newRec = {...row.rec, contacted: !row.rec.contacted};
+    const updated = {...doc, records: {...doc.records, [row.studentId]: newRec}};
+    persistAttendance(attendance.map(a=>a.id===doc.id?updated:a));
+  };
+  const setReason = (row, reason) => {
+    const doc = attendance.find(a=>a.id===row.docId);
+    if(!doc) return;
+    const newRec = {...row.rec, reason};
+    const updated = {...doc, records: {...doc.records, [row.studentId]: newRec}};
+    persistAttendance(attendance.map(a=>a.id===doc.id?updated:a));
+  };
+
+  const contactedCount = rows.filter(r=>r.rec.contacted).length;
+
+  return (
+    <div className="card">
+      <div className="section-title">غيابات اليوم — {today} ({rows.length} طالب، {contactedCount} تم التواصل معاهم)</div>
+      {rows.length===0 ? <Empty icon="📋" text="لا يوجد غياب مسجل اليوم لأي مجموعة لحد دلوقتي" /> : (
+        <table>
+          <thead><tr><th>الطالب</th><th>المجموعة</th><th>المدرس</th><th>تم التواصل ومعرفة السبب</th><th>سبب الغياب</th></tr></thead>
+          <tbody>
+            {rows.map(row=>(
+              <tr key={row.docId+'_'+row.studentId}>
+                <td style={{fontWeight:800}}>{row.student.name}</td>
+                <td>{row.group?row.group.name:'—'}</td>
+                <td>{row.teacher?'مستر '+row.teacher.name:'—'}</td>
+                <td>
+                  <label style={{display:'inline-flex',alignItems:'center',gap:6,cursor:'pointer'}}>
+                    <input type="checkbox" checked={!!row.rec.contacted} onChange={()=>toggleContacted(row)} style={{width:18,height:18}} />
+                    {row.rec.contacted ? <span className="badge badge-green">✓ تم</span> : <span className="badge badge-rose">لسه</span>}
+                  </label>
+                </td>
+                <td>
+                  <input defaultValue={row.rec.reason||''} onBlur={e=>setReason(row, e.target.value)} placeholder="اكتب السبب لما تعرفه..." style={{minWidth:160}} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup,teachers,groupById}){
   const [mode,setMode] = useState('regular'); // 'regular' | 'highlevel'
   const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
@@ -2332,8 +2413,13 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
       <div className="chip-row" style={{marginBottom:14}}>
         <span className={"chip "+(mode==='regular'?'active':'')} onClick={()=>setMode('regular')}>حضور عادي</span>
         <span className={"chip "+(mode==='highlevel'?'active':'')} onClick={()=>setMode('highlevel')}>🌟 حضور الهاي ليفل (منهج إضافي — لغات/تجريبي)</span>
+        <span className={"chip "+(mode==='absences'?'active':'')} onClick={()=>setMode('absences')}>📋 غيابات اليوم (كل المدرسين)</span>
       </div>
 
+      {mode==='absences' ? (
+        <TodayAbsencesPanel students={students} groups={groups} teachers={teachers} attendance={attendance} persistAttendance={persistAttendance} groupById={groupById} />
+      ) : (
+      <React.Fragment>
       <div className="toolbar">
         <select style={{maxWidth:260}} value={groupId} onChange={e=>setGroupId(e.target.value)}>
           {visibleGroups.length===0 && <option value="">لا توجد مجموعات{mode==='regular'?' في هذا اليوم':''}</option>}
@@ -2421,6 +2507,8 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
           </div>
         )}
       </div>
+      </React.Fragment>
+      )}
     </div>
   );
 }
@@ -2579,17 +2667,33 @@ function studentPaidMonths(student, group, payments, monthsBack=6){
 
 // Comprehensive reminder: every unpaid month found (not just the one on screen) + unpaid
 // notebook balance (owner's students only) — one message covering everything owed.
+// A student who joins after the 5th of a month only owes half that first month (see the
+// "نصف الشهر" quick-pay option) — this flags exactly that case so the reminder can explain
+// why, instead of just showing a number with no context.
+function joinedMidMonth(student, monthKey){
+  if(!student.joinDate || !student.joinDate.startsWith(monthKey)) return false;
+  const day = Number(student.joinDate.split('-')[2]);
+  return day > 5;
+}
+
 function buildFullReminderText(student, teacher, group, payments, isOwnerStudent){
   const unpaid = studentUnpaidMonths(student, group, payments);
   const nb = isOwnerStudent ? normalizeNotebookStatus(student) : {remaining:0};
   const lines = [`مرحبًا 🌟 تذكير بالمصروفات المستحقة للابن/ة *${student.name}*:`, ``];
   let total = 0;
+  let hasMidMonthJoin = false;
   unpaid.forEach(u=>{
-    lines.push(`📅 ${monthLabel(u.month)}: متبقي ${fmtMoney(u.remaining)}${u.paid>0?` (من أصل ${fmtMoney(u.due)})`:''}`);
+    const midJoin = joinedMidMonth(student, u.month);
+    if(midJoin) hasMidMonthJoin = true;
+    lines.push(`📅 ${monthLabel(u.month)}: متبقي ${fmtMoney(u.remaining)}${u.paid>0?` (من أصل ${fmtMoney(u.due)})`:''}${midJoin?' — نص شهر (انضمام في نص الشهر)':''}`);
     total += u.remaining;
   });
   if(nb.remaining>0){ lines.push(`📓 رسوم المذكرة: متبقي ${fmtMoney(nb.remaining)}`); total += nb.remaining; }
-  lines.push(``, `💰 الإجمالي المستحق: ${fmtMoney(total)}`, ``, `يرجى السداد في أقرب وقت 🙏`);
+  lines.push(``, `💰 الإجمالي المستحق: ${fmtMoney(total)}`, ``);
+  if(hasMidMonthJoin){
+    lines.push(`ℹ️ بما إن الانضمام كان في نص الشهر، السداد ده نص شهر بس لحد ما ينتظم الطالب، وبعد كده السداد هيبقى شهر كامل مقدمًا.`);
+  }
+  lines.push(`ℹ️ نظام الدفع مقدم شهريًا، وآخر موعد للسداد يوم 5 من بداية كل شهر.`, ``, `يرجى السداد في أقرب وقت 🙏`);
   if(teacher) lines.push(`المدرس: مستر ${teacher.name}`);
   lines.push(`SamySchool`);
   return {text: lines.join('\n'), total, hasAnything: unpaid.length>0 || nb.remaining>0};
@@ -5289,7 +5393,7 @@ function ReportsTab({students,groups,teachers,attendance,grades,payments,groupBy
           <div className="section-title">تفاصيل الحصص بالتواريخ</div>
           {stats.sessions.length===0 ? <div className="muted small" style={{marginBottom:16}}>لا توجد حصص مسجلة هذا الشهر</div> : (
             <table style={{marginBottom:16}}>
-              <thead><tr><th>التاريخ</th><th>الحضور</th><th>التسميع</th><th>الواجب</th></tr></thead>
+              <thead><tr><th>التاريخ</th><th>الحضور</th><th>التسميع</th><th>الواجب</th><th>تم التواصل</th><th>سبب الغياب</th></tr></thead>
               <tbody>
                 {stats.sessions.map(s=>(
                   <tr key={s.date}>
@@ -5297,6 +5401,8 @@ function ReportsTab({students,groups,teachers,attendance,grades,payments,groupBy
                     <td>{s.status==='present'?<span className="badge badge-green">حاضر</span>:<span className="badge badge-rose">غائب</span>}</td>
                     <td>{s.recitation!==null?`${s.recitation}/${s.recitationMax||'-'}`:'—'}</td>
                     <td>{s.homework===true?<span className="badge badge-green">✓</span>:s.homework===false?<span className="badge badge-rose">✕</span>:'—'}</td>
+                    <td>{s.status==='absent' ? (s.contacted?<span className="badge badge-green">✓ تم</span>:<span className="badge badge-rose">لسه</span>) : '—'}</td>
+                    <td className="small muted">{s.status==='absent' ? (s.reason||'—') : '—'}</td>
                   </tr>
                 ))}
               </tbody>
