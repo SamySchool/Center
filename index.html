@@ -338,6 +338,9 @@ const studentFee = (student, group) => {
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const todayISO = () => new Date().toISOString().slice(0,10);
+// Formats a Date using its LOCAL calendar fields (unlike toISOString, which converts to UTC
+// first and can shift the date by a day) — used when iterating a date range day by day.
+const dateToISO = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 const monthKey = (d=new Date()) => d.toISOString().slice(0,7);
 const monthLabel = (mk) => {
   const [y,m] = mk.split('-');
@@ -4165,6 +4168,191 @@ function DailyCashTab({students,payments}){
   );
 }
 
+// ============================= الجرد (daily cash reconciliation) =============================
+// Every day, Mohamed counts what he actually received — cash handed over by the secretary,
+// plus any InstaPay/Vodafone Cash transfers — and compares it against what the system says
+// was collected that day (from the payments records). Doc id = the date itself, so there's
+// exactly one inventory record per day, easy to upsert without a query.
+function InventoryView({payments,isAdmin}){
+  const [tab,setTab] = useState('daily'); // 'daily' | 'monthly'
+  const [date,setDate] = useState(todayISO());
+  const [month,setMonth] = useState(monthKey());
+  const [record,setRecord] = useState(null); // {cash, instapay, vodafone, notes} or null while loading
+  const [monthRecords,setMonthRecords] = useState([]);
+  const [saving,setSaving] = useState(false);
+  const [backfilling,setBackfilling] = useState(false);
+
+  useEffect(()=>{
+    if(tab!=='daily') return;
+    setRecord(null);
+    db.collection('inventoryLog').doc(date).get()
+      .then(doc=>setRecord(doc.exists ? doc.data() : {cash:'', instapay:'', vodafone:'', notes:''}))
+      .catch(()=>setRecord({cash:'', instapay:'', vodafone:'', notes:''}));
+  },[date,tab]);
+
+  useEffect(()=>{
+    if(tab!=='monthly') return;
+    const unsub = db.collection('inventoryLog')
+      .where('date','>=',month+'-01').where('date','<=',month+'-31')
+      .onSnapshot(snap=>{
+        setMonthRecords(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.date.localeCompare(b.date)));
+      }, err=>console.error(err));
+    return unsub;
+  },[month,tab]);
+
+  const systemCollected = (d) => payments.filter(p=>p.paid && p.paidDate===d).reduce((s,p)=>s+(Number(p.amount)||0),0);
+
+  const save = () => {
+    if(!record) return;
+    setSaving(true);
+    const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
+    db.collection('inventoryLog').doc(date).set({
+      date,
+      cash: Number(record.cash)||0,
+      instapay: Number(record.instapay)||0,
+      vodafone: Number(record.vodafone)||0,
+      notes: record.notes||'',
+      recordedBy: recipientLabel,
+      updatedAt: new Date().toISOString(),
+    }, {merge:true}).finally(()=>setSaving(false));
+  };
+
+  // One-click, one-time backfill: every day from the term's start (1 Sep 2026) up to
+  // yesterday that has no inventory record yet gets one created assuming it matched the
+  // system exactly (per Mohamed's instruction) — never overwrites a day already recorded.
+  const backfillAssumedMatch = async () => {
+    if(!confirm('هيتم افتراض إن كل الأيام من 1 سبتمبر 2026 لحد إمبارح متطابقة تمامًا مع السستم (لو مش مسجلة قبل كده). متابعة؟')) return;
+    setBackfilling(true);
+    try{
+      const start = new Date(2026,8,1); // 1 Sep 2026
+      const end = new Date(); end.setDate(end.getDate()-1); // up to yesterday
+      const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
+      let batch = db.batch();
+      let opsInBatch = 0;
+      const cur = new Date(start);
+      while(cur <= end){
+        const d = dateToISO(cur);
+        const doc = await db.collection('inventoryLog').doc(d).get();
+        if(!doc.exists){
+          const sys = systemCollected(d);
+          batch.set(db.collection('inventoryLog').doc(d), {
+            date:d, cash:sys, instapay:0, vodafone:0,
+            notes:'بيانات مفترضة (قبل تفعيل الجرد) — مفترض تطابقها مع السستم',
+            assumed:true, recordedBy:recipientLabel, updatedAt:new Date().toISOString(),
+          });
+          opsInBatch++;
+          if(opsInBatch>=400){ await batch.commit(); batch = db.batch(); opsInBatch=0; }
+        }
+        cur.setDate(cur.getDate()+1);
+      }
+      if(opsInBatch>0) await batch.commit();
+      alert('تم افتراض تطابق الأيام القديمة بنجاح.');
+    }catch(err){
+      console.error(err);
+      alert('حصل خطأ أثناء الافتراض: '+(err.message||''));
+    }
+    setBackfilling(false);
+  };
+
+  const actualTotal = record ? (Number(record.cash)||0)+(Number(record.instapay)||0)+(Number(record.vodafone)||0) : 0;
+  const sysTotal = systemCollected(date);
+  const diff = actualTotal - sysTotal;
+
+  return (
+    <div>
+      <div className="chip-row" style={{marginBottom:16}}>
+        <span className={"chip "+(tab==='daily'?'active':'')} onClick={()=>setTab('daily')}>تقرير جرد يومي</span>
+        <span className={"chip "+(tab==='monthly'?'active':'')} onClick={()=>setTab('monthly')}>تقرير جرد شهري</span>
+        {isAdmin && <button className="btn btn-ghost btn-sm" disabled={backfilling} onClick={backfillAssumedMatch} style={{marginRight:'auto'}}>{backfilling?'جارِ الافتراض...':'🔄 افترض تطابق الأيام من 1 سبتمبر'}</button>}
+      </div>
+
+      {tab==='daily' && (
+        <div>
+          <div className="toolbar"><input type="date" style={{maxWidth:180}} value={date} onChange={e=>setDate(e.target.value)} /></div>
+          {!record ? <div className="muted small">جارِ التحميل...</div> : (
+            <React.Fragment>
+              {record.assumed && <div className="small" style={{color:'var(--amber)',fontWeight:700,marginBottom:10}}>⚠️ ده يوم مفترض تطابقه تلقائيًا (قبل تفعيل الجرد) — تقدر تعدّله لو عندك الأرقام الفعلية.</div>}
+              <div className="card" style={{marginBottom:18}}>
+                <div className="section-title">استلمت إيه فعليًا يوم {date}</div>
+                <div className="grid grid-3">
+                  <Field label="💵 كاش من السكرتيرة"><input type="number" value={record.cash} onChange={e=>setRecord({...record,cash:e.target.value})} placeholder="0" /></Field>
+                  <Field label="💳 تحويل InstaPay"><input type="number" value={record.instapay} onChange={e=>setRecord({...record,instapay:e.target.value})} placeholder="0" /></Field>
+                  <Field label="📱 تحويل Vodafone Cash"><input type="number" value={record.vodafone} onChange={e=>setRecord({...record,vodafone:e.target.value})} placeholder="0" /></Field>
+                </div>
+                <Field label="ملاحظات (اختياري)"><input value={record.notes} onChange={e=>setRecord({...record,notes:e.target.value})} placeholder="أي تفاصيل عن فرق الجرد..." /></Field>
+                <button className="btn btn-primary" disabled={saving} onClick={save}>{saving?'جارِ الحفظ...':'حفظ الجرد'}</button>
+              </div>
+
+              <div className="card" style={{borderColor: diff===0?'var(--green)':'var(--rose)'}}>
+                <div className="section-title">مقارنة الجرد — {date}</div>
+                <table>
+                  <tbody>
+                    <tr><td>المسجل في السستم (تحصيل اليوم)</td><td style={{fontWeight:800}}>{fmtMoney(sysTotal)}</td></tr>
+                    <tr><td>المستلم فعليًا (كاش + تحويلات)</td><td style={{fontWeight:800}}>{fmtMoney(actualTotal)}</td></tr>
+                  </tbody>
+                </table>
+                <div style={{marginTop:14,paddingTop:14,borderTop:'2px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div style={{fontWeight:900,fontSize:15}}>{diff===0?'✅ مطابق تمامًا':diff>0?'⚠️ فائض':'⚠️ عجز'}</div>
+                  <div style={{fontWeight:900,fontSize:20,color:diff===0?'var(--green)':'var(--rose)'}}>{diff===0?fmtMoney(0):(diff>0?'+':'')+fmtMoney(diff)}</div>
+                </div>
+              </div>
+            </React.Fragment>
+          )}
+        </div>
+      )}
+
+      {tab==='monthly' && (
+        <div>
+          <div className="toolbar"><input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} /></div>
+          {(() => {
+            const totalCash = monthRecords.reduce((s,r)=>s+(Number(r.cash)||0),0);
+            const totalInstapay = monthRecords.reduce((s,r)=>s+(Number(r.instapay)||0),0);
+            const totalVodafone = monthRecords.reduce((s,r)=>s+(Number(r.vodafone)||0),0);
+            const totalActual = totalCash+totalInstapay+totalVodafone;
+            const totalSystem = monthRecords.reduce((s,r)=>s+systemCollected(r.date),0);
+            const totalDiff = totalActual - totalSystem;
+            return (
+              <React.Fragment>
+                <div className="grid grid-3" style={{marginBottom:18}}>
+                  <div className="card"><div className="stat-label">إجمالي المسجل بالسستم</div><div className="stat-value">{fmtMoney(totalSystem)}</div></div>
+                  <div className="card"><div className="stat-label">إجمالي المستلم فعليًا</div><div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(totalActual)}</div></div>
+                  <div className="card"><div className="stat-label">الفرق الكلي</div><div className="stat-value" style={{color:totalDiff===0?'var(--green)':'var(--rose)'}}>{totalDiff===0?fmtMoney(0):(totalDiff>0?'+':'')+fmtMoney(totalDiff)}</div></div>
+                </div>
+                <div className="card">
+                  <div className="section-title">تفصيل الأيام — {monthLabel(month)} ({monthRecords.length} يوم مسجّل)</div>
+                  {monthRecords.length===0 ? <Empty icon="🧾" text="لا يوجد جرد مسجل لهذا الشهر بعد" /> : (
+                    <table>
+                      <thead><tr><th>اليوم</th><th>كاش</th><th>InstaPay</th><th>Vodafone Cash</th><th>الإجمالي الفعلي</th><th>المسجل بالسستم</th><th>الفرق</th></tr></thead>
+                      <tbody>
+                        {monthRecords.map(r=>{
+                          const actual = (Number(r.cash)||0)+(Number(r.instapay)||0)+(Number(r.vodafone)||0);
+                          const sys = systemCollected(r.date);
+                          const d = actual-sys;
+                          return (
+                            <tr key={r.id}>
+                              <td>{r.date}{r.assumed && <span className="badge badge-amber" style={{marginRight:6,fontSize:9}}>افتراضي</span>}</td>
+                              <td>{fmtMoney(r.cash)}</td>
+                              <td>{fmtMoney(r.instapay)}</td>
+                              <td>{fmtMoney(r.vodafone)}</td>
+                              <td style={{fontWeight:700}}>{fmtMoney(actual)}</td>
+                              <td className="small muted">{fmtMoney(sys)}</td>
+                              <td style={{fontWeight:800,color:d===0?'var(--green)':'var(--rose)'}}>{d===0?'✓':(d>0?'+':'')+fmtMoney(d)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </React.Fragment>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AccountingTab({teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}){
   const [view,setView] = useState('expenses'); // expenses | shares | daily | treasury
   const [month,setMonth] = useState(currentMonth);
@@ -4279,6 +4467,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
         <span className={"chip "+(view==='daily'?'active':'')} onClick={()=>setView('daily')}>تقرير يومي مفصل</span>
         <span className={"chip "+(view==='treasury'?'active':'')} onClick={()=>setView('treasury')}>💰 تقرير الخزينة</span>
         <span className={"chip "+(view==='notebooks'?'active':'')} onClick={()=>setView('notebooks')}>📓 إيراد المذكرات</span>
+        <span className={"chip "+(view==='inventory'?'active':'')} onClick={()=>setView('inventory')}>🧾 الجرد</span>
       </div>
 
       {view==='notebooks' && (
@@ -4365,6 +4554,8 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
           </div>
         </div>
       )}
+
+      {view==='inventory' && <InventoryView payments={payments} isAdmin={isAdmin} />}
 
       {view==='expenses' && (
         <div>
