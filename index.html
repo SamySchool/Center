@@ -63,6 +63,7 @@ body{
 .btn-ghost{background:#fff; color:var(--ink); border:1.5px solid var(--border);}
 .btn-ghost:hover{background:#f4efe8;}
 .btn-sm{padding:6px 10px; font-size:12px; border-radius:8px;}
+.btn-disabled{opacity:0.35; pointer-events:none; cursor:not-allowed;}
 .btn-danger{background:var(--rose-bg); color:var(--rose);}
 .card{background:#fff; border:1px solid var(--border); border-radius:var(--card-radius); padding:18px;}
 .grid{display:grid; gap:16px;}
@@ -1676,6 +1677,16 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
       .sort((a,b)=>b.streak-a.streak);
   },[students,attendance]);
 
+  // Overdue students whose group actually meets today — so the secretary knows exactly who
+  // to remind (via the payment reminder icon) before they even walk in this afternoon.
+  const overdueToday = useMemo(()=>{
+    const todayWeekday = new Date().getDay();
+    return overdueStudents.filter(s=>{
+      const g = groupById(s.groupId);
+      return g && g.days && g.days.length>0 && g.days.includes(todayWeekday);
+    });
+  },[overdueStudents,groupById]);
+
   return (
     <div>
       <div className="topbar">
@@ -1686,6 +1697,20 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
       </div>
 
       {isAdmin && <SecretaryActivityCard setTab={setTab} />}
+
+      {overdueToday.length>0 && (
+        <div className="card" style={{marginBottom:18, borderColor:'var(--rose)'}}>
+          <div className="section-title" style={{color:'var(--rose)'}}>💳 متأخرين في السداد وهيحضروا النهاردة ({overdueToday.length})</div>
+          <div className="small muted" style={{marginTop:-6,marginBottom:10}}>فكّر تبعتلهم تذكير الصبح قبل ما ييجوا الحصة — زرار 📤 موجود جنب كل طالب في تبويب المصروفات.</div>
+          <div className="tag-row">
+            {overdueToday.map(s=>{
+              const g = groupById(s.groupId);
+              return <span key={s.id} className="badge badge-rose">{s.name}{g?` — ${g.name}`:''}</span>;
+            })}
+          </div>
+          <div style={{marginTop:12}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('payments')}>الذهاب للمصروفات →</button></div>
+        </div>
+      )}
 
       <div className="grid grid-4" style={{marginBottom:18}}>
         <div className="card">
@@ -2002,7 +2027,7 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
         {isAdmin && (
           <div style={{display:'flex',gap:10}}>
             <button className="btn btn-ghost" onClick={()=>setEditingTeacher({id:null,name:'',subject:''})}>+ مدرس</button>
-            <button className="btn btn-primary" onClick={()=>setEditingGroup({id:null,name:'',teacherId:teachers[0]?teachers[0].id:'',stage:STAGES[0],schedule:'',fee:'',capacity:30,commissionPercent:70})}>+ مجموعة جديدة</button>
+            <button className="btn btn-primary" onClick={()=>setEditingGroup({id:null,name:'',teacherId:teachers[0]?teachers[0].id:'',stage:STAGES[0],schedule:'',days:[],fee:'',capacity:30,commissionPercent:70})}>+ مجموعة جديدة</button>
           </div>
         )}
       </div>
@@ -2094,7 +2119,15 @@ function GroupForm({group,teachers,onCancel,onSave}){
           </select>
         </Field>
       </div>
-      <Field label="موعد المجموعة"><input value={f.schedule} onChange={e=>set('schedule',e.target.value)} placeholder="مثال: سبت وإثنين 5-7 م" /></Field>
+      <Field label="موعد المجموعة (نص وصفي)"><input value={f.schedule} onChange={e=>set('schedule',e.target.value)} placeholder="مثال: سبت وإثنين 5-7 م" /></Field>
+      <Field label="أيام الحضور الفعلية (لفلترة شاشة الحضور تلقائيًا)">
+        <div className="chip-row">
+          {SCHED_DAY_SHORT.map((name,d)=>(
+            <span key={d} className={"chip "+((f.days||[]).includes(d)?'active':'')}
+              onClick={()=>{ const cur=f.days||[]; set('days', cur.includes(d)?cur.filter(x=>x!==d):[...cur,d].sort()); }}>{name}</span>
+          ))}
+        </div>
+      </Field>
       <div className="grid grid-2">
         <Field label="الاشتراك الشهري (ج.م)"><input type="number" value={f.fee} onChange={e=>set('fee',e.target.value)} placeholder="300" /></Field>
         <Field label="أقصى عدد للطلاب"><input type="number" value={f.capacity} onChange={e=>set('capacity',e.target.value)} placeholder="30" /></Field>
@@ -2102,7 +2135,7 @@ function GroupForm({group,teachers,onCancel,onSave}){
       <Field label="نسبة المدرس من إيرادات المجموعة (%)"><input type="number" min="0" max="100" value={f.commissionPercent ?? 70} onChange={e=>set('commissionPercent',e.target.value)} placeholder="70" /></Field>
       <Field label="الدرجة النهائية للتسميع لكل حصة"><input type="number" min="1" value={f.recitationMax ?? 10} onChange={e=>set('recitationMax',e.target.value)} placeholder="10" /></Field>
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المجموعة');return;} onSave({...f,fee:Number(f.fee)||0,capacity:Number(f.capacity)||30,commissionPercent:Number(f.commissionPercent ?? 70),recitationMax:Number(f.recitationMax ?? 10)}); }}>حفظ</button>
+        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المجموعة');return;} onSave({...f,fee:Number(f.fee)||0,capacity:Number(f.capacity)||30,commissionPercent:Number(f.commissionPercent ?? 70),recitationMax:Number(f.recitationMax ?? 10),days:f.days||[]}); }}>حفظ</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
       </div>
     </div>
@@ -2153,41 +2186,76 @@ function buildAbsenceWaLink(student, group, teacher, date){
   return `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
+// Loose match for "this teacher teaches English" since teacher.subject is free text
+// (used to restrict the movable High-Level attendance to English-track students only).
+function isEnglishSubject(teacher){
+  if(!teacher || !teacher.subject) return false;
+  const s = teacher.subject;
+  return /english/i.test(s) || s.includes('انجلي') || s.includes('إنجلي');
+}
+
 function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup,teachers,groupById}){
+  const [mode,setMode] = useState('regular'); // 'regular' | 'highlevel'
   const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
   const [date,setDate] = useState(todayISO());
+  const [showAllGroups,setShowAllGroups] = useState(false);
   const [showHistory,setShowHistory] = useState(false);
   const [autoSaved,setAutoSaved] = useState(false);
-  const [docId,setDocId] = useState(null); // Firestore doc id for this group+date, once resolved
+  const [docId,setDocId] = useState(null); // Firestore doc id for this group+date+mode, once resolved
   const dirtyRef = React.useRef(false);
 
-  useEffect(()=>{ if(!groupId && groups[0]) setGroupId(groups[0].id); },[groups]);
+  // A group's scheduled weekdays (from GroupForm's day picker) decide which groups even show
+  // up as options for a given date — a group meeting Sat/Mon has no business appearing in the
+  // dropdown on a Sunday. Groups with no configured days (legacy) always show, so nothing
+  // old silently disappears.
+  const dateWeekday = (() => { const [y,m,d] = date.split('-').map(Number); return new Date(y,m-1,d).getDay(); })();
+  const groupsForDate = mode==='highlevel' ? groups : groups.filter(g => !g.days || g.days.length===0 || g.days.includes(dateWeekday));
+  const visibleGroups = showAllGroups ? groups : groupsForDate;
 
-  const roster = studentsInGroup(groupId);
-  const existing = attendance.find(a=>a.groupId===groupId && a.date===date);
+  useEffect(()=>{
+    if(!groupId && groups[0]) setGroupId(groups[0].id);
+    // if the currently-picked group doesn't meet on the newly-picked date, jump to one that does
+    else if(mode==='regular' && !showAllGroups && groupId && !groupsForDate.some(g=>g.id===groupId) && groupsForDate[0]){
+      setGroupId(groupsForDate[0].id);
+    }
+  },[groups,date,mode,showAllGroups]);
+
+  const group = groupById(groupId);
+  const teacher = group ? teachers.find(t=>t.id===group.teacherId) : null;
+
+  // Regular roster = normal active students in the group. High-Level roster = only the
+  // English-track students (لغات/تجريبي) in that group, for the movable extra-curriculum
+  // session — independent of the group's fixed 2-day schedule.
+  const fullRoster = studentsInGroup(groupId);
+  const roster = mode==='highlevel'
+    ? fullRoster.filter(s=> (s.educationType==='لغات' || s.educationType==='تجريبي') && isEnglishSubject(teacher))
+    : fullRoster;
+
+  const existing = attendance.find(a=>a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode);
   const [records,setRecords] = useState(existing?existing.records:{});
 
   // For dates inside the live sync window, the record (if any) is already in `attendance`.
   // For older, backdated entries the record may exist in Firestore but outside our live
   // window (see ATTENDANCE_SYNC_DAYS) — so we check on-demand instead of risking a duplicate
-  // doc for the same group+date.
+  // doc for the same group+date+mode.
   useEffect(()=>{
     dirtyRef.current = false;
-    const ex = attendance.find(a=>a.groupId===groupId && a.date===date);
+    const ex = attendance.find(a=>a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode);
     if(ex){ setRecords({...ex.records}); setDocId(ex.id); return; }
     if(!groupId){ setRecords({}); setDocId(null); return; }
     if(date < attendanceSyncCutoff()){
       setRecords({}); setDocId(undefined); // undefined = still checking
-      db.collection('attendance').where('groupId','==',groupId).where('date','==',date).limit(1).get()
+      db.collection('attendance').where('groupId','==',groupId).where('date','==',date).limit(5).get()
         .then(snap=>{
-          if(!snap.empty){ const d=snap.docs[0]; setRecords({...d.data().records}); setDocId(d.id); }
+          const match = snap.docs.find(d=>((d.data().sessionType)||'regular')===mode);
+          if(match){ setRecords({...match.data().records}); setDocId(match.id); }
           else setDocId(null);
         })
         .catch(()=>setDocId(null));
     }else{
       setRecords({}); setDocId(null);
     }
-  },[groupId,date]);
+  },[groupId,date,mode]);
 
   // Auto-save (debounced): every toggle writes to Firestore within ~1s, instead of waiting
   // for a manual "save" click — so a power cut mid-session can't wipe out an unsaved roster.
@@ -2195,8 +2263,8 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
     if(!dirtyRef.current) return;
     if(docId===undefined) return; // still resolving whether an older doc already exists
     const t = setTimeout(()=>{
-      const rec = {id: docId||uid(), groupId, date, records};
-      const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date));
+      const rec = {id: docId||uid(), groupId, date, records, sessionType:mode};
+      const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode));
       persistAttendance([...others, rec]);
       if(!docId) setDocId(rec.id);
       dirtyRef.current = false;
@@ -2240,17 +2308,15 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
 
   const save = () => {
     if(docId===undefined){ alert('لسه بيتحقق من سجل قديم لنفس اليوم، استنى ثانية وحاول تاني.'); return; }
-    const rec = {id: docId||uid(), groupId, date, records};
-    const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date));
+    const rec = {id: docId||uid(), groupId, date, records, sessionType:mode};
+    const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode));
     persistAttendance([...others, rec]);
     if(!docId) setDocId(rec.id);
     dirtyRef.current = false;
     alert('تم حفظ الحضور بنجاح');
   };
 
-  const history = attendance.filter(a=>a.groupId===groupId).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,15);
-  const group = groupById(groupId);
-  const teacher = group ? teachers.find(t=>t.id===group.teacherId) : null;
+  const history = attendance.filter(a=>a.groupId===groupId && (a.sessionType||'regular')===mode).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,15);
   const recitationMax = (group && group.recitationMax) || 10;
 
   return (
@@ -2260,19 +2326,32 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
         {autoSaved && <span className="badge badge-green">✓ اتحفظ أوتوماتيك</span>}
       </div>
 
+      <div className="chip-row" style={{marginBottom:14}}>
+        <span className={"chip "+(mode==='regular'?'active':'')} onClick={()=>setMode('regular')}>حضور عادي</span>
+        <span className={"chip "+(mode==='highlevel'?'active':'')} onClick={()=>setMode('highlevel')}>🌟 حضور الهاي ليفل (منهج إضافي — لغات/تجريبي)</span>
+      </div>
+
       <div className="toolbar">
         <select style={{maxWidth:260}} value={groupId} onChange={e=>setGroupId(e.target.value)}>
-          {groups.length===0 && <option value="">لا توجد مجموعات</option>}
-          {groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+          {visibleGroups.length===0 && <option value="">لا توجد مجموعات{mode==='regular'?' في هذا اليوم':''}</option>}
+          {visibleGroups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
         </select>
         <input type="date" style={{maxWidth:180}} value={date} onChange={e=>setDate(e.target.value)} />
+        {mode==='regular' && <span className={"chip "+(showAllGroups?'active':'')} onClick={()=>setShowAllGroups(!showAllGroups)}>عرض كل المجموعات (مش بس يوم النهاردة)</span>}
         <button className="btn btn-ghost btn-sm" onClick={()=>markAll('present')}>✓ تحديد الكل حاضر</button>
         <button className="btn btn-ghost btn-sm" onClick={()=>markAll('absent')}>✕ تحديد الكل غائب</button>
         <button className="btn btn-primary" style={{marginRight:'auto'}} onClick={save} disabled={!groupId || roster.length===0}>حفظ الحضور</button>
       </div>
 
+      {mode==='highlevel' && <div className="hint" style={{background:'#F3F6FB',borderRadius:8,padding:'10px 12px',fontSize:11.5,color:'var(--muted)',marginBottom:14}}>وضع الهاي ليفل: حضور منفصل تمامًا عن الحضور العادي، لطلاب اللغات والتجريبي بس، وتقدر تسجله أي يوم (مش لازم يوم المجموعة الأساسي).</div>}
+
       {!groupId || roster.length===0 ? (
-        <div className="card"><Empty icon="✓" text={groups.length===0 ? 'أضف مجموعة أولاً من تبويب المجموعات' : 'لا يوجد طلاب في هذه المجموعة بعد'} /></div>
+        <div className="card"><Empty icon="✓" text={
+          groups.length===0 ? 'أضف مجموعة أولاً من تبويب المجموعات'
+          : mode==='highlevel' ? 'لا يوجد طلاب لغات/تجريبي في هذه المجموعة'
+          : visibleGroups.length===0 ? 'لا توجد مجموعات مجدولة ليوم النهاردة — دوس "عرض كل المجموعات" لو محتاج تسجّل يدويًا'
+          : 'لا يوجد طلاب في هذه المجموعة بعد'
+        } /></div>
       ) : (
         <div className="card">
           <div className="section-title">{roster.length} طالب — {records && Object.values(records).filter(v=>attStatus(v)==='present').length} حاضر اليوم</div>
@@ -2447,29 +2526,111 @@ function normalizePaymentRecord(rec, dueAmount){
   return {...rec, amountDue, amountPaid, paid: amountDue<=0 ? true : amountPaid>=amountDue};
 }
 
-// Combined reminder: monthly balance remaining + (owner's students only) unpaid notebook fee,
-// always signed with the teacher's name.
-function buildPaymentReminderText(student, teacher, month, due, paidSoFar, notebookAmount, notebookPaid){
-  const remaining = Math.max(0, due-paidSoFar);
-  const lines = [
-    `مرحبًا 🌟 تذكير بخصوص مصروفات الابن/ة *${student.name}* لشهر ${monthLabel(month)}:`,
-    ``,
-    `💳 المطلوب: ${fmtMoney(due)}`,
-  ];
-  if(paidSoFar>0) lines.push(`✅ المدفوع حتى الآن: ${fmtMoney(paidSoFar)}`);
-  if(remaining>0) lines.push(`⚠️ المتبقي: ${fmtMoney(remaining)}`);
-  if(notebookAmount>0 && !notebookPaid){
-    lines.push(``, `📓 رسوم المذكرة: ${fmtMoney(notebookAmount)} (لسه مش مدفوعة)`);
+// Notebook fees now support partial payment too (a discounted student might still pay in
+// parts) — same normalizer pattern as monthly tuition, backward-compatible with the old
+// plain `notebookPaid` boolean.
+function normalizeNotebookStatus(student){
+  const due = Number(student.notebookFeeAmount)||0;
+  const paid = student.notebookAmountPaid!==undefined ? Number(student.notebookAmountPaid)||0 : (student.notebookPaid ? due : 0);
+  return {due, paid, remaining: Math.max(0,due-paid), isPaid: due<=0 ? true : paid>=due};
+}
+
+// Scans the last `monthsBack` months (default 6) for this student and returns the ones that
+// still have a balance due — powers the comprehensive reminder ("any unpaid month or
+// notebook", not just whichever month happens to be selected on screen).
+function studentUnpaidMonths(student, group, payments, monthsBack=6){
+  const out = [];
+  const d = new Date();
+  for(let i=0;i<monthsBack;i++){
+    const mk = monthKey(d);
+    const due = studentFee(student, group);
+    const norm = normalizePaymentRecord(payments.find(p=>p.studentId===student.id && p.month===mk), due);
+    if(due>0 && !norm.paid) out.push({month:mk, due:norm.amountDue, paid:norm.amountPaid, remaining:norm.amountDue-norm.amountPaid});
+    d.setMonth(d.getMonth()-1);
   }
-  lines.push(``, `يرجى السداد في أقرب وقت 🙏`);
+  return out.reverse();
+}
+// Same idea but for months with SOME payment recorded — powers the comprehensive
+// confirmation message ("everything paid so far", not just today's single transaction).
+function studentPaidMonths(student, group, payments, monthsBack=6){
+  const out = [];
+  const d = new Date();
+  for(let i=0;i<monthsBack;i++){
+    const mk = monthKey(d);
+    const due = studentFee(student, group);
+    const norm = normalizePaymentRecord(payments.find(p=>p.studentId===student.id && p.month===mk), due);
+    if(norm.amountPaid>0) out.push({month:mk, due:norm.amountDue, paid:norm.amountPaid, full:norm.paid});
+    d.setMonth(d.getMonth()-1);
+  }
+  return out.reverse();
+}
+
+// Comprehensive reminder: every unpaid month found (not just the one on screen) + unpaid
+// notebook balance (owner's students only) — one message covering everything owed.
+function buildFullReminderText(student, teacher, group, payments, isOwnerStudent){
+  const unpaid = studentUnpaidMonths(student, group, payments);
+  const nb = isOwnerStudent ? normalizeNotebookStatus(student) : {remaining:0};
+  const lines = [`مرحبًا 🌟 تذكير بالمصروفات المستحقة للابن/ة *${student.name}*:`, ``];
+  let total = 0;
+  unpaid.forEach(u=>{
+    lines.push(`📅 ${monthLabel(u.month)}: متبقي ${fmtMoney(u.remaining)}${u.paid>0?` (من أصل ${fmtMoney(u.due)})`:''}`);
+    total += u.remaining;
+  });
+  if(nb.remaining>0){ lines.push(`📓 رسوم المذكرة: متبقي ${fmtMoney(nb.remaining)}`); total += nb.remaining; }
+  lines.push(``, `💰 الإجمالي المستحق: ${fmtMoney(total)}`, ``, `يرجى السداد في أقرب وقت 🙏`);
   if(teacher) lines.push(`المدرس: مستر ${teacher.name}`);
   lines.push(`SamySchool`);
-  return lines.join('\n');
+  return {text: lines.join('\n'), total, hasAnything: unpaid.length>0 || nb.remaining>0};
 }
-function buildPaymentReminderWaLink(student, teacher, month, due, paidSoFar, notebookAmount, notebookPaid){
+function buildFullReminderWaLink(student, teacher, group, payments, isOwnerStudent){
   const phone = normalizeEgyptPhone(student.parentPhone);
   if(!phone) return null;
-  return `https://wa.me/${phone}?text=${encodeURIComponent(buildPaymentReminderText(student,teacher,month,due,paidSoFar,notebookAmount,notebookPaid))}`;
+  const r = buildFullReminderText(student, teacher, group, payments, isOwnerStudent);
+  if(!r.hasAnything) return null;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(r.text)}`;
+}
+
+// Comprehensive confirmation: every paid/partially-paid month found + paid notebook amount
+// (owner's students only) — a single "here's everything you've settled" message, rather
+// than only confirming whichever one payment was just entered.
+function buildFullConfirmText(student, teacher, group, payments, isOwnerStudent){
+  const paid = studentPaidMonths(student, group, payments);
+  const nb = isOwnerStudent ? normalizeNotebookStatus(student) : {paid:0};
+  const lines = [`مرحبًا 🌟 نأكد المدفوعات المسددة للابن/ة *${student.name}*:`, ``];
+  let total = 0;
+  paid.forEach(p=>{
+    lines.push(`📅 ${monthLabel(p.month)}: ${fmtMoney(p.paid)}${p.full?' ✅':' (دفعة جزئية)'}`);
+    total += p.paid;
+  });
+  if(nb.paid>0){ lines.push(`📓 رسوم المذكرة: ${fmtMoney(nb.paid)}${nb.isPaid?' ✅':' (دفعة جزئية)'}`); total += nb.paid; }
+  lines.push(``, `💰 إجمالي المدفوع: ${fmtMoney(total)}`, ``, `شكرًا لثقتكم 🙏`);
+  if(teacher) lines.push(`المدرس: مستر ${teacher.name}`);
+  lines.push(`SamySchool`);
+  return {text: lines.join('\n'), total, hasAnything: paid.length>0 || nb.paid>0};
+}
+function buildFullConfirmWaLink(student, teacher, group, payments, isOwnerStudent){
+  const phone = normalizeEgyptPhone(student.parentPhone);
+  if(!phone) return null;
+  const r = buildFullConfirmText(student, teacher, group, payments, isOwnerStudent);
+  if(!r.hasAnything) return null;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(r.text)}`;
+}
+
+// Notebook-only reminder — a separate message from the general tuition reminder, for
+// students who specifically still owe (all or part of) their notebook fee.
+function buildNotebookOnlyReminderWaLink(student, teacher, nb){
+  const phone = normalizeEgyptPhone(student.parentPhone);
+  if(!phone || nb.remaining<=0) return null;
+  const lines = [
+    `مرحبًا 🌟 تذكير بخصوص رسوم مذكرة الابن/ة *${student.name}*:`,
+    ``,
+    `📓 سعر المذكرة: ${fmtMoney(nb.due)}`,
+  ];
+  if(nb.paid>0) lines.push(`✅ المدفوع: ${fmtMoney(nb.paid)}`);
+  lines.push(`⚠️ المتبقي: ${fmtMoney(nb.remaining)}`, ``, `يرجى السداد في أقرب وقت 🙏`);
+  if(teacher) lines.push(`المدرس: مستر ${teacher.name}`);
+  lines.push(`SamySchool`);
+  return `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
 function PaymentsTab({students,groups,teachers,persistStudents,payments,persistPayments,groupById,setReceiptData,isAdmin,refunds,persistRefunds,actorRef}){
@@ -2480,6 +2641,7 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
   const [refunding,setRefunding] = useState(null); // student obj or null
   const [payingFor,setPayingFor] = useState(null); // student obj or null (partial-payment entry)
   const [financeFor,setFinanceFor] = useState(null); // student obj or null (full financial detail modal)
+  const [notebookPayFor,setNotebookPayFor] = useState(null); // student obj or null (notebook partial-payment entry)
 
   const list = students.filter(s=>{
     const matchG = filterGroup==='all'||s.groupId===filterGroup;
@@ -2524,9 +2686,15 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
     persistPayments(payments.map(p=>p.id===existing.id?{...p, amountPaid:0, amount:0, paid:false, paidDate:null, paidAt:null, paidBy:null}:p));
   };
 
-  const toggleNotebook = (student) => {
-    const willPay = !student.notebookPaid;
-    persistStudents(students.map(s=>s.id===student.id?{...s, notebookPaid:willPay, notebookPaidDate: willPay?todayISO():null}:s));
+  const recordNotebookPayment = (student, amountToAdd) => {
+    const nb = normalizeNotebookStatus(student);
+    const newPaid = nb.paid + amountToAdd;
+    persistStudents(students.map(s=>s.id===student.id?{...s, notebookAmountPaid:newPaid, notebookPaid: newPaid>=nb.due, notebookPaidDate:todayISO()}:s));
+    setNotebookPayFor(null);
+  };
+  const resetNotebookPayment = (student) => {
+    if(!confirm('إلغاء تسجيل دفع المذكرة بالكامل؟')) return;
+    persistStudents(students.map(s=>s.id===student.id?{...s, notebookAmountPaid:0, notebookPaid:false, notebookPaidDate:null}:s));
   };
 
   const printReceipt = (student) => {
@@ -2601,9 +2769,9 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
                 const remaining = Math.max(0, norm.amountDue-norm.amountPaid);
                 const owner = isOwnerStudent(s);
                 const teacher = teacherFor(s);
-                const reminderLink = remaining>0 || (owner && s.notebookFeeAmount>0 && !s.notebookPaid)
-                  ? buildPaymentReminderWaLink(s, teacher, month, norm.amountDue, norm.amountPaid, owner?(Number(s.notebookFeeAmount)||0):0, !!s.notebookPaid)
-                  : null;
+                const nb = normalizeNotebookStatus(s);
+                const reminderLink = buildFullReminderWaLink(s, teacher, g, payments, owner);
+                const confirmLink = buildFullConfirmWaLink(s, teacher, g, payments, owner);
                 return (
                   <tr key={s.id}>
                     <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
@@ -2612,18 +2780,20 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
                     <td style={{color:'var(--green)',fontWeight:700}}>{fmtMoney(norm.amountPaid)}</td>
                     <td>{remaining>0 ? <span className="badge badge-rose">{fmtMoney(remaining)}</span> : <span className="badge badge-green">تم السداد</span>}</td>
                     <td>
-                      {!owner ? <span className="small muted">—</span> : (
-                        <button className={"btn btn-sm "+(s.notebookPaid?'btn-ghost':'btn-danger')} onClick={()=>toggleNotebook(s)}>
-                          {s.notebookPaid?'✓ مذكرة مدفوعة':`مذكرة ${fmtMoney(s.notebookFeeAmount||0)}`}
+                      {!owner ? <span className="small muted">—</span> : nb.due<=0 ? <span className="small muted">لا يوجد</span> : (
+                        <button className={"btn btn-sm "+(nb.isPaid?'btn-ghost':'btn-danger')} onClick={()=>setNotebookPayFor(s)}>
+                          {nb.isPaid?'✓ مذكرة مدفوعة':nb.paid>0?`مذكرة ${fmtMoney(nb.remaining)} متبقي`:`مذكرة ${fmtMoney(nb.due)}`}
                         </button>
                       )}
                     </td>
                     <td>
                       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                         {remaining>0 && <button className="btn btn-primary btn-sm" onClick={()=>setPayingFor(s)}>تسجيل سداد</button>}
-                        {norm.amountPaid>0 && <button className="btn btn-ghost btn-sm" onClick={()=>printReceipt(s)}>🖶 إيصال</button>}
                         {isAdmin && norm.amountPaid>0 && <button className="btn btn-ghost btn-sm" onClick={()=>cancelPayment(s)}>إلغاء</button>}
-                        {reminderLink && <a className="btn btn-ghost btn-sm" href={reminderLink} target="_blank" rel="noopener noreferrer">📤 تذكير</a>}
+                        {/* الثلاث أيقونات الخاصة بالدفع: طباعة / تذكير واتساب / تأكيد واتساب */}
+                        <button className="btn btn-ghost btn-sm" onClick={()=>printReceipt(s)} disabled={norm.amountPaid<=0} title="طباعة إيصال">🖶</button>
+                        <a className={"btn btn-ghost btn-sm"+(!reminderLink?' btn-disabled':'')} href={reminderLink||undefined} target="_blank" rel="noopener noreferrer" title="تذكير بالمتبقي (واتساب)" onClick={e=>{ if(!reminderLink) e.preventDefault(); }}>📤</a>
+                        <a className={"btn btn-ghost btn-sm"+(!confirmLink?' btn-disabled':'')} href={confirmLink||undefined} target="_blank" rel="noopener noreferrer" title="تأكيد الدفع (واتساب)" onClick={e=>{ if(!confirmLink) e.preventDefault(); }}>✅</a>
                         <button className="btn btn-ghost btn-sm" onClick={()=>setFinanceFor(s)}>💰 الوضع المالي</button>
                         <button className="btn btn-ghost btn-sm" onClick={()=>setRefunding(s)}>↩ استرداد</button>
                       </div>
@@ -2634,6 +2804,39 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
             </tbody>
           </table>
         )}
+      </div>
+
+      <div className="card" style={{marginBottom:18}}>
+        {(() => {
+          const unpaidNotebooks = students
+            .filter(s=>{ const g=groupById(s.groupId); const t=teacherFor(s); return t && t.isOwner; })
+            .map(s=>({student:s, nb:normalizeNotebookStatus(s), teacher:teacherFor(s)}))
+            .filter(x=>x.nb.remaining>0);
+          return (
+            <React.Fragment>
+              <div className="section-title">📓 طلاب لم يسددوا ثمن المذكرة ({unpaidNotebooks.length})</div>
+              {unpaidNotebooks.length===0 ? <div className="muted small">كل طلاب مستر محمد سامي مسددين ثمن المذكرة ✅</div> : (
+                <table>
+                  <thead><tr><th>الطالب</th><th>سعر المذكرة</th><th>مدفوع</th><th>متبقي</th><th></th></tr></thead>
+                  <tbody>
+                    {unpaidNotebooks.map(({student,nb,teacher})=>{
+                      const link = buildNotebookOnlyReminderWaLink(student, teacher, nb);
+                      return (
+                        <tr key={student.id}>
+                          <td>{student.name}</td>
+                          <td>{fmtMoney(nb.due)}</td>
+                          <td className="small muted">{fmtMoney(nb.paid)}</td>
+                          <td style={{color:'var(--rose)',fontWeight:800}}>{fmtMoney(nb.remaining)}</td>
+                          <td>{link ? <a className="btn btn-ghost btn-sm" href={link} target="_blank" rel="noopener noreferrer">📤 تذكير المذكرة</a> : <span className="small muted">لا يوجد رقم</span>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </React.Fragment>
+          );
+        })()}
       </div>
 
       <div className="card">
@@ -2669,6 +2872,16 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
           />
         </Modal>
       )}
+      {notebookPayFor && (
+        <Modal title={`تسجيل دفع المذكرة — ${notebookPayFor.name}`} onClose={()=>setNotebookPayFor(null)}>
+          <NotebookPaymentForm
+            student={notebookPayFor}
+            onCancel={()=>setNotebookPayFor(null)}
+            onSave={(amt)=>recordNotebookPayment(notebookPayFor, amt)}
+            onReset={isAdmin?()=>{resetNotebookPayment(notebookPayFor); setNotebookPayFor(null);}:null}
+          />
+        </Modal>
+      )}
       {refunding && (
         <Modal title={`استرداد أموال — ${refunding.name}`} onClose={()=>setRefunding(null)}>
           <RefundForm onCancel={()=>setRefunding(null)} onSave={saveRefund} />
@@ -2690,6 +2903,7 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
 function PartialPaymentForm({student,due,paidSoFar,onCancel,onSave}){
   const remaining = Math.max(0, due-paidSoFar);
   const [amount,setAmount] = useState(String(remaining||due));
+  const half = Math.round(due/2);
   return (
     <div>
       <div className="grid grid-3" style={{marginBottom:14}}>
@@ -2698,10 +2912,35 @@ function PartialPaymentForm({student,due,paidSoFar,onCancel,onSave}){
         <div><div className="small muted">المتبقي</div><div style={{fontWeight:800,color:'var(--rose)'}}>{fmtMoney(remaining)}</div></div>
       </div>
       <Field label="المبلغ المدفوع الآن (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder={String(remaining)} /></Field>
+      <div className="chip-row" style={{marginBottom:14}}>
+        <span className="chip" onClick={()=>setAmount(String(remaining||due))}>المبلغ كامل ({fmtMoney(remaining||due)})</span>
+        <span className="chip" onClick={()=>setAmount(String(half))}>نصف الشهر ({fmtMoney(half)}) — لمنضم متأخر</span>
+      </div>
       <div className="small muted" style={{marginBottom:14}}>لو المبلغ أقل من المتبقي، هيتسجل كدفعة جزئية والباقي يفضل ظاهر كمتأخر.</div>
       <div className="modal-actions">
         <button className="btn btn-primary" onClick={()=>{ const n=Number(amount); if(!n||n<=0){alert('أدخل مبلغ صحيح');return;} onSave(n); }}>تسجيل السداد</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+      </div>
+    </div>
+  );
+}
+
+function NotebookPaymentForm({student,onCancel,onSave,onReset}){
+  const nb = normalizeNotebookStatus(student);
+  const [amount,setAmount] = useState(String(nb.remaining||nb.due));
+  return (
+    <div>
+      <div className="grid grid-3" style={{marginBottom:14}}>
+        <div><div className="small muted">سعر المذكرة</div><div style={{fontWeight:800}}>{fmtMoney(nb.due)}</div></div>
+        <div><div className="small muted">المدفوع</div><div style={{fontWeight:800,color:'var(--green)'}}>{fmtMoney(nb.paid)}</div></div>
+        <div><div className="small muted">المتبقي</div><div style={{fontWeight:800,color:'var(--rose)'}}>{fmtMoney(nb.remaining)}</div></div>
+      </div>
+      <Field label="المبلغ المدفوع الآن (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder={String(nb.remaining)} /></Field>
+      <div className="small muted" style={{marginBottom:14}}>سعر المذكرة نفسه (شامل أي خصم) بيتظبط من تبويب الطلاب — تعديل بيانات الطالب.</div>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ const n=Number(amount); if(!n||n<=0){alert('أدخل مبلغ صحيح');return;} onSave(n); }}>تسجيل الدفع</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+        {onReset && nb.paid>0 && <button className="btn btn-danger" style={{marginRight:'auto'}} onClick={onReset}>إلغاء الدفع بالكامل</button>}
       </div>
     </div>
   );
@@ -2713,39 +2952,29 @@ function StudentFinanceDetail({student,group,teacher,isOwnerStudent,payments,per
   const months = [];
   const d = new Date();
   for(let i=0;i<6;i++){ months.push(monthKey(d)); d.setMonth(d.getMonth()-1); }
-
-  const toggleNotebook = () => {
-    const willPay = !student.notebookPaid;
-    persistStudents(students.map(s=>s.id===student.id?{...s, notebookPaid:willPay, notebookPaidDate: willPay?todayISO():null}:s));
-  };
+  const nb = normalizeNotebookStatus(student);
 
   return (
     <div>
-      {isOwnerStudent && (
+      {isOwnerStudent && nb.due>0 && (
         <div className="card" style={{marginBottom:16, borderColor:'var(--amber)'}}>
           <div className="section-title" style={{margin:0,marginBottom:8}}>📓 رسوم المذكرة</div>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div className="small">{fmtMoney(student.notebookFeeAmount||0)} — {student.notebookPaid?`مدفوعة بتاريخ ${student.notebookPaidDate||''}`:'لسه مش مدفوعة'}</div>
-            <button className={"btn btn-sm "+(student.notebookPaid?'btn-ghost':'btn-primary')} onClick={toggleNotebook}>{student.notebookPaid?'إلغاء الدفع':'تسجيل الدفع'}</button>
-          </div>
+          <div className="small">{fmtMoney(nb.due)} — مدفوع {fmtMoney(nb.paid)}{nb.isPaid?` (بتاريخ ${student.notebookPaidDate||''})`:` — متبقي ${fmtMoney(nb.remaining)}`}</div>
         </div>
       )}
       <div className="section-title">آخر 6 شهور</div>
       <table>
-        <thead><tr><th>الشهر</th><th>المطلوب</th><th>المدفوع</th><th>الحالة</th><th></th></tr></thead>
+        <thead><tr><th>الشهر</th><th>المطلوب</th><th>المدفوع</th><th>الحالة</th></tr></thead>
         <tbody>
           {months.map(m=>{
             const due = studentFee(student, group);
             const norm = normalizePaymentRecord(payments.find(p=>p.studentId===student.id && p.month===m), due);
-            const remaining = Math.max(0, norm.amountDue-norm.amountPaid);
-            const link = remaining>0 ? buildPaymentReminderWaLink(student, teacher, m, norm.amountDue, norm.amountPaid, 0, true) : null;
             return (
               <tr key={m}>
                 <td>{monthLabel(m)}</td>
                 <td>{fmtMoney(norm.amountDue)}</td>
                 <td>{fmtMoney(norm.amountPaid)}</td>
                 <td>{norm.paid?<span className="badge badge-green">مكتمل</span>:norm.amountPaid>0?<span className="badge badge-amber">جزئي</span>:<span className="badge badge-rose">لم يُدفع</span>}</td>
-                <td>{link && <a className="btn btn-ghost btn-sm" href={link} target="_blank" rel="noopener noreferrer">📤</a>}</td>
               </tr>
             );
           })}
@@ -4004,6 +4233,16 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
 
   const ownerLabel = (e) => e.owner==='academy' || !e.owner ? 'الأكاديمية (عام)' : (teachers.find(t=>t.id===e.owner)?.name || 'الأكاديمية (عام)');
 
+  // Notebook revenue — owner's (Mr. Mohamed Samy's) students only, admin-only view.
+  // Uses the same due/paid normalizer as tuition so per-student discounts (a lower
+  // notebookFeeAmount) and partial payments both show correctly.
+  const notebookStudents = students
+    .filter(s=>{ const g = groupById(s.groupId); const t = g?teachers.find(x=>x.id===g.teacherId):null; return t && t.isOwner; })
+    .map(s=>({student:s, nb: normalizeNotebookStatus(s)}))
+    .filter(x=>x.nb.due>0);
+  const notebookPaidList = notebookStudents.filter(x=>x.nb.paid>0);
+  const notebookTotalRevenue = notebookPaidList.reduce((s,x)=>s+x.nb.paid,0);
+
   return (
     <div>
       <div className="topbar">
@@ -4015,7 +4254,36 @@ function AccountingTab({teachers,groups,students,attendance,payments,expenses,pe
         <span className={"chip "+(view==='shares'?'active':'')} onClick={()=>setView('shares')}>نسب المدرسين وصافي الربح</span>
         <span className={"chip "+(view==='daily'?'active':'')} onClick={()=>setView('daily')}>تقرير يومي مفصل</span>
         <span className={"chip "+(view==='treasury'?'active':'')} onClick={()=>setView('treasury')}>💰 تقرير الخزينة</span>
+        <span className={"chip "+(view==='notebooks'?'active':'')} onClick={()=>setView('notebooks')}>📓 إيراد المذكرات</span>
       </div>
+
+      {view==='notebooks' && (
+        <div>
+          <div className="grid grid-2" style={{marginBottom:18}}>
+            <div className="card"><div className="stat-label">إجمالي إيراد المذكرات (محصّل)</div><div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(notebookTotalRevenue)}</div></div>
+            <div className="card"><div className="stat-label">عدد الطلاب اللي دفعوا (كامل أو جزئي)</div><div className="stat-value">{notebookPaidList.length} / {notebookStudents.length}</div></div>
+          </div>
+          <div className="card">
+            <div className="section-title">تفاصيل مذكرات مستر محمد سامي</div>
+            {notebookStudents.length===0 ? <Empty icon="📓" text="لا يوجد طلاب عندهم رسوم مذكرة مسجلة" /> : (
+              <table>
+                <thead><tr><th>الطالب</th><th>سعر المذكرة</th><th>المدفوع</th><th>المتبقي</th><th>تاريخ آخر دفعة</th></tr></thead>
+                <tbody>
+                  {notebookStudents.sort((a,b)=>b.nb.paid-a.nb.paid).map(({student,nb})=>(
+                    <tr key={student.id}>
+                      <td>{student.name}</td>
+                      <td>{fmtMoney(nb.due)}</td>
+                      <td style={{color:'var(--green)',fontWeight:800}}>{fmtMoney(nb.paid)}</td>
+                      <td>{nb.remaining>0?<span className="badge badge-rose">{fmtMoney(nb.remaining)}</span>:<span className="badge badge-green">مكتمل</span>}</td>
+                      <td className="small muted">{student.notebookPaidDate||'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
 
       {view==='expenses' && (
         <div>
