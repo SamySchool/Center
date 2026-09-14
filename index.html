@@ -605,7 +605,7 @@ async function signOutBoth(){
 const GOOGLE_CLIENT_ID = "REPLACE_WITH_YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
 const SCHEDULE_OWNER_NAME_EN = "Mr. Mohamed Samy";
 
-const COLLECTIONS = ['teachers','groups','students','attendance','grades','payments','expenses','privateLessons','refunds','teacherPayouts'];
+const COLLECTIONS = ['teachers','groups','students','attendance','grades','payments','expenses','privateLessons','refunds','teacherPayouts','renters','renterPayments'];
 
 // Attendance is the one collection that grows every day forever (one doc per group per
 // session), so only a rolling window stays live-synced in memory — plenty for daily
@@ -1115,6 +1115,8 @@ function App(){
   const [privateLessons,setPrivateLessons] = useState([]);
   const [refunds,setRefunds] = useState([]);
   const [teacherPayouts,setTeacherPayouts] = useState([]);
+  const [renters,setRenters] = useState([]);
+  const [renterPayments,setRenterPayments] = useState([]);
 
   const teachersRef = React.useRef([]); teachersRef.current = teachers;
   const groupsRef = React.useRef([]); groupsRef.current = groups;
@@ -1126,6 +1128,8 @@ function App(){
   const privateLessonsRef = React.useRef([]); privateLessonsRef.current = privateLessons;
   const refundsRef = React.useRef([]); refundsRef.current = refunds;
   const teacherPayoutsRef = React.useRef([]); teacherPayoutsRef.current = teacherPayouts;
+  const rentersRef = React.useRef([]); rentersRef.current = renters;
+  const renterPaymentsRef = React.useRef([]); renterPaymentsRef.current = renterPayments;
   const actorRef = React.useRef({user:null, role:null});
   useEffect(()=>{ actorRef.current = {user, role}; },[user,role]);
 
@@ -1165,7 +1169,7 @@ function App(){
     const activeCollections = role==='admin' ? COLLECTIONS : COLLECTIONS.filter(c=>c!=='expenses' && c!=='teacherPayouts');
     let pending = activeCollections.length;
     const settle = () => { if(pending>0){ pending--; if(pending===0) setDataLoaded(true); } };
-    const setters = {teachers:setTeachers, groups:setGroups, students:setStudents, attendance:setAttendance, grades:setGrades, payments:setPayments, expenses:setExpenses, privateLessons:setPrivateLessons, refunds:setRefunds, teacherPayouts:setTeacherPayouts};
+    const setters = {teachers:setTeachers, groups:setGroups, students:setStudents, attendance:setAttendance, grades:setGrades, payments:setPayments, expenses:setExpenses, privateLessons:setPrivateLessons, refunds:setRefunds, teacherPayouts:setTeacherPayouts, renters:setRenters, renterPayments:setRenterPayments};
     const queryFor = (name) => name==='attendance'
       ? db.collection('attendance').where('date','>=',attendanceSyncCutoff())
       : db.collection(name);
@@ -1220,6 +1224,8 @@ function App(){
   const persistPrivateLessons = React.useCallback(makePersist('privateLessons', privateLessonsRef, setPrivateLessons, actorRef),[]);
   const persistRefunds = React.useCallback(makePersist('refunds', refundsRef, setRefunds, actorRef),[]);
   const persistTeacherPayouts = React.useCallback(makePersist('teacherPayouts', teacherPayoutsRef, setTeacherPayouts, actorRef),[]);
+  const persistRenters = React.useCallback(makePersist('renters', rentersRef, setRenters, actorRef),[]);
+  const persistRenterPayments = React.useCallback(makePersist('renterPayments', renterPaymentsRef, setRenterPayments, actorRef),[]);
 
   // بعد تسجيل الدخول ومزامنة الطلاب، خصص أكواد منصة تلقائياً لأي طالب قديم بلا كود —
   // لطلاب مستر محمد سامي فقط (باقي الأساتذة معندهومش منصة أونلاين أصلاً).
@@ -1284,7 +1290,7 @@ function App(){
   },[students,payments,groups,currentMonth]);
 
   const backup = () => {
-    const data = {teachers,groups,students,attendance,grades,payments,exportedAt:new Date().toISOString()};
+    const data = {teachers,groups,students,attendance,grades,payments,renters,renterPayments,exportedAt:new Date().toISOString()};
     const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1303,6 +1309,8 @@ function App(){
         if(data.attendance) persistAttendance(data.attendance);
         if(data.grades) persistGrades(data.grades);
         if(data.payments) persistPayments(data.payments);
+        if(data.renters) persistRenters(data.renters);
+        if(data.renterPayments) persistRenterPayments(data.renterPayments);
         alert('تم استرجاع النسخة الاحتياطية بنجاح');
       }catch(err){ alert('ملف غير صالح'); }
     };
@@ -1317,8 +1325,8 @@ function App(){
   const [lastBackupAt,setLastBackupAt] = useState(null);
   const backupDataRef = React.useRef(null);
   useEffect(()=>{
-    backupDataRef.current = {teachers,groups,students,attendance,grades,payments,expenses,privateLessons,refunds,teacherPayouts};
-  },[teachers,groups,students,attendance,grades,payments,expenses,privateLessons,refunds,teacherPayouts]);
+    backupDataRef.current = {teachers,groups,students,attendance,grades,payments,expenses,privateLessons,refunds,teacherPayouts,renters,renterPayments};
+  },[teachers,groups,students,attendance,grades,payments,expenses,privateLessons,refunds,teacherPayouts,renters,renterPayments]);
 
   const triggerCloudBackup = React.useCallback(async (reason)=>{
     if(!backupDataRef.current || !user) return;
@@ -1383,29 +1391,21 @@ function App(){
     { title:'الطلاب والحضور', items: [
         {id:'students', label:'الطلاب', icon:'👤'},
         {id:'groups', label:'المجموعات والمدرسين', icon:'👥'},
-        {id:'teacherProfile', label:'ملفات المدرسين', icon:'🎓'},
-        {id:'attendance', label:'الحضور والغياب', icon:'✓'},
-        {id:'scan', label:'تسجيل حضور بالكود', icon:'▣'},
-        {id:'faces', label:'التعرف على الوجه', icon:'◎'},
-        {id:'codes', label:'أكواد الطلاب', icon:'⌗'},
+        {id:'followup', label:'المتابعة', icon:'📋'},
       ] },
-    { title:'الدرجات والمصروفات', items: [
-        {id:'grades', label:'الدرجات', icon:'✎'},
-        {id:'payments', label:'المصروفات', icon:'৳'},
-        {id:'dailyCash', label:'الخزينة اليومية', icon:'💰'},
+    { title:'الحسابات', items: [
+        {id:'accounting', label:'الحسابات', icon:'⎘'},
         {id:'private', label:'الدروس الخصوصية', icon:'✦'},
       ] },
     { title:'أدواتي', items: [
         {id:'schedule', label:'جدولي', icon:'🗓'},
-        {id:'reports', label:'التقارير الشهرية', icon:'▤'},
       ] },
     { title:'الإدارة', items: [
         {id:'trash', label:'سلة المحذوفات', icon:'🗑'},
         {id:'secretaryActivity', label:'نشاط السكرتيرة', icon:'🛡'},
-        {id:'accounting', label:'الحسابات', icon:'⎘'},
       ] },
   ];
-  const ADMIN_ONLY_IDS = new Set(['accounting','schedule','secretaryActivity']);
+  const ADMIN_ONLY_IDS = new Set(['schedule','secretaryActivity']);
 
   return (
     <React.Fragment>
@@ -1465,21 +1465,13 @@ function App(){
       <div className="main">
         {tab==='dashboard' && <Dashboard {...{students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab,isAdmin}} />}
         {tab==='students' && <StudentsTab {...{students,groups,teachers,persistStudents,payments,currentMonth,groupById,attendance,isAdmin,actorRef}} />}
-        {tab==='groups' && <GroupsTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin,actorRef}} />}
-        {tab==='teacherProfile' && <TeacherProfileTab {...{teachers,groups,students,attendance,grades,payments,groupById,persistGroups,currentMonth,setTab,isAdmin,actorRef}} />}
-        {tab==='attendance' && <AttendanceTab {...{groups,students,attendance,persistAttendance,studentsInGroup,teachers,groupById}} />}
-        {tab==='scan' && <ScanAttendanceTab {...{groups,students,attendance,persistAttendance,payments,groupById}} />}
-        {tab==='faces' && <FaceAttendanceTab {...{groups,students,persistStudents,attendance,persistAttendance,payments,groupById}} />}
-        {tab==='codes' && <StudentCodesTab {...{students,groups,groupById}} />}
-        {tab==='grades' && <GradesTab {...{groups,students,grades,persistGrades,studentsInGroup,isAdmin}} />}
-        {tab==='payments' && <PaymentsTab {...{students,groups,teachers,persistStudents,payments,persistPayments,groupById,setReceiptData,isAdmin,refunds,persistRefunds,actorRef}} />}
+        {tab==='groups' && <GroupsAndTeachersTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin,actorRef,students,attendance,grades,payments,groupById,currentMonth,setTab,renters,persistRenters,renterPayments,persistRenterPayments}} />}
+        {tab==='followup' && <FollowupTab {...{groups,students,attendance,persistAttendance,studentsInGroup,teachers,groupById,payments,persistStudents,grades,persistGrades,isAdmin}} />}
         {tab==='private' && <PrivateLessonsTab {...{teachers,privateLessons,persistPrivateLessons,isAdmin,actorRef}} />}
-        {tab==='dailyCash' && <DailyCashTab {...{students,payments}} />}
         {tab==='trash' && <TrashTab {...{isAdmin}} />}
         {tab==='secretaryActivity' && isAdmin && <SecretaryActivityReportTab />}
         {tab==='schedule' && isAdmin && <ScheduleTab />}
-        {tab==='accounting' && isAdmin && <AccountingTab {...{teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}} />}
-        {tab==='reports' && <ReportsTab {...{students,groups,teachers,attendance,grades,payments,groupById}} />}
+        {tab==='accounting' && <AccountingTab {...{teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,persistRefunds,teacherPayouts,persistTeacherPayouts,isAdmin,setReceiptData,actorRef,renters,renterPayments}} />}
       </div>
       </div>
     </div>
@@ -1718,14 +1710,14 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
       {overdueToday.length>0 && (
         <div className="card" style={{marginBottom:18, borderColor:'var(--rose)'}}>
           <div className="section-title" style={{color:'var(--rose)'}}>💳 متأخرين في السداد وهيحضروا النهاردة ({overdueToday.length})</div>
-          <div className="small muted" style={{marginTop:-6,marginBottom:10}}>فكّر تبعتلهم تذكير الصبح قبل ما ييجوا الحصة — زرار 📤 موجود جنب كل طالب في تبويب المصروفات.</div>
+          <div className="small muted" style={{marginTop:-6,marginBottom:10}}>فكّر تبعتلهم تذكير الصبح قبل ما ييجوا الحصة — زرار 📤 موجود جنب كل طالب في تبويب الحسابات (المصروفات).</div>
           <div className="tag-row">
             {overdueToday.map(s=>{
               const g = groupById(s.groupId);
               return <span key={s.id} className="badge badge-rose">{s.name}{g?` — ${g.name}`:''}</span>;
             })}
           </div>
-          <div style={{marginTop:12}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('payments')}>الذهاب للمصروفات →</button></div>
+          <div style={{marginTop:12}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('accounting')}>الذهاب للمصروفات →</button></div>
         </div>
       )}
 
@@ -1773,7 +1765,7 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
       <div className="card">
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
           <div className="section-title" style={{margin:0}}>الطلاب المتأخرين في السداد — {monthLabel(currentMonth)}</div>
-          <button className="link-btn" onClick={()=>setTab('payments')}>عرض المصروفات ←</button>
+          <button className="link-btn" onClick={()=>setTab('accounting')}>عرض المصروفات ←</button>
         </div>
         {overdueStudents.length===0 ? <Empty icon="✓" text="لا يوجد طلاب متأخرين — الحمد لله" /> : (
           <table>
@@ -2018,6 +2010,31 @@ function StudentForm({student,groups,onCancel,onSave}){
   );
 }
 
+// ============================= المجموعات والمدرسين (merged: groups + teacher profiles + rented teachers) =============================
+// One tab for everything about the teaching staff: the academy's own groups/teachers roster,
+// each teacher's consolidated profile, and separately the outside teachers who just rent the
+// physical space by the month (no groups/commission — they pay Mohamed a flat monthly rent).
+const GROUPS_TEACHERS_SUBTABS = [
+  {id:'groups', label:'المجموعات والمدرسين'},
+  {id:'profiles', label:'ملفات المدرسين'},
+  {id:'renters', label:'المدرسين المستأجرين'},
+];
+function GroupsAndTeachersTab(props){
+  const [sub,setSub] = useState('groups');
+  return (
+    <div>
+      <div className="chip-row" style={{marginBottom:18}}>
+        {GROUPS_TEACHERS_SUBTABS.map(s=>(
+          <span key={s.id} className={"chip "+(sub===s.id?'active':'')} onClick={()=>setSub(s.id)}>{s.label}</span>
+        ))}
+      </div>
+      {sub==='groups' && <GroupsTab {...props} />}
+      {sub==='profiles' && <TeacherProfileTab {...props} />}
+      {sub==='renters' && <RentersPanel {...props} />}
+    </div>
+  );
+}
+
 function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin,actorRef}){
   const [editingGroup,setEditingGroup] = useState(null);
   const [editingTeacher,setEditingTeacher] = useState(null);
@@ -2179,6 +2196,142 @@ function TeacherForm({teacher,onCancel,onSave}){
   );
 }
 
+function RenterForm({renter,onCancel,onSave}){
+  const [f,setF] = useState(renter);
+  const set=(k,v)=>setF({...f,[k]:v});
+  return (
+    <div>
+      <Field label="اسم المدرس المستأجر"><input value={f.name} onChange={e=>set('name',e.target.value)} /></Field>
+      <Field label="المادة / التخصص (اختياري)"><input value={f.subject||''} onChange={e=>set('subject',e.target.value)} placeholder="مثال: رياضيات" /></Field>
+      <Field label="رقم الهاتف"><input type="tel" inputMode="numeric" value={f.phone||''} onChange={e=>set('phone',e.target.value)} placeholder="01xxxxxxxxx" /></Field>
+      <Field label="الإيجار الشهري (ج.م)"><input type="number" value={f.monthlyRent} onChange={e=>set('monthlyRent',e.target.value)} placeholder="1000" /></Field>
+      <Field label="ملاحظات (اختياري)"><input value={f.notes||''} onChange={e=>set('notes',e.target.value)} /></Field>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم المدرس');return;} onSave({...f, monthlyRent:Number(f.monthlyRent)||0}); }}>حفظ</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+      </div>
+    </div>
+  );
+}
+
+function RenterPaymentForm({renter,onCancel,onSave}){
+  const [amount,setAmount] = useState(renter.monthlyRent || '');
+  return (
+    <div>
+      <Field label="المبلغ المستلم (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder={String(renter.monthlyRent||'')} /></Field>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={()=>{ if(!Number(amount)){alert('أدخل المبلغ');return;} onSave(amount); }}>تسجيل السداد</button>
+        <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
+      </div>
+    </div>
+  );
+}
+
+// المدرسين المستأجرين: مدرسين من برة الأكاديمية بياخدوا المكان بإيجار شهري ثابت (مش جزء من
+// نظام النسبة ولا عندهم مجموعات في السستم) — بتتابع هنا نفس فكرة متابعة مصروفات الطلاب:
+// إيجار الشهر ده مدفوع ولا لأ، وبكام.
+function RentersPanel({renters,persistRenters,renterPayments,persistRenterPayments,currentMonth,isAdmin,actorRef}){
+  const [editingRenter,setEditingRenter] = useState(null);
+  const [month,setMonth] = useState(currentMonth);
+  const [payingFor,setPayingFor] = useState(null); // renter obj or null
+
+  const saveRenter = (data) => {
+    if(data.id) persistRenters(renters.map(r=>r.id===data.id?data:r));
+    else persistRenters([...renters,{...data,id:uid()}]);
+    setEditingRenter(null);
+  };
+  const removeRenter = (r) => { if(confirm('تأكيد نقل المدرس المستأجر لسلة المحذوفات؟')) removeWithTrash('renters', r, renters, persistRenters, actorRef.current); };
+
+  const recordFor = (rid) => renterPayments.find(p=>p.renterId===rid && p.month===month);
+
+  const markPaid = (renter, amount) => {
+    const existing = recordFor(renter.id);
+    const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
+    const payload = {
+      id: existing?existing.id:uid(), renterId:renter.id, month,
+      amount: Number(amount)||0, paid:true,
+      paidDate: todayISO(), paidAt: new Date().toISOString(), paidBy: recipientLabel,
+    };
+    if(existing) persistRenterPayments(renterPayments.map(p=>p.id===existing.id?payload:p));
+    else persistRenterPayments([...renterPayments,payload]);
+    setPayingFor(null);
+  };
+  const cancelPaid = (renter) => {
+    const existing = recordFor(renter.id);
+    if(!existing) return;
+    if(!confirm('إلغاء تسجيل سداد الإيجار لهذا الشهر؟')) return;
+    persistRenterPayments(renterPayments.map(p=>p.id===existing.id?{...p, paid:false, amount:0, paidDate:null, paidAt:null, paidBy:null}:p));
+  };
+
+  const monthTotal = renterPayments.filter(p=>p.month===month && p.paid).reduce((s,p)=>s+(Number(p.amount)||0),0);
+
+  return (
+    <div>
+      <div className="topbar">
+        <div><h1>المدرسين المستأجرين</h1><div className="date">مدرسين من برة الأكاديمية بيستأجروا المكان بإيجار شهري{!isAdmin && ' — عرض فقط'}</div></div>
+        {isAdmin && <button className="btn btn-primary" onClick={()=>setEditingRenter({id:null,name:'',subject:'',phone:'',monthlyRent:'',notes:''})}>+ مدرس مستأجر جديد</button>}
+      </div>
+
+      <div className="toolbar">
+        <input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} />
+      </div>
+
+      <div className="card" style={{marginBottom:18}}>
+        <div className="stat-label">إجمالي الإيجارات المحصّلة — {monthLabel(month)}</div>
+        <div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(monthTotal)}</div>
+      </div>
+
+      <div className="card">
+        <div className="section-title">قائمة المدرسين المستأجرين ({renters.length})</div>
+        {renters.length===0 ? <Empty icon="🏠" text="لا يوجد مدرسين مستأجرين بعد" /> : (
+          <table>
+            <thead><tr><th>الاسم</th><th>المادة</th><th>الهاتف</th><th>الإيجار الشهري</th><th>حالة {monthLabel(month)}</th><th></th></tr></thead>
+            <tbody>
+              {renters.map(r=>{
+                const rec = recordFor(r.id);
+                const isPaidThisMonth = rec && rec.paid;
+                return (
+                  <tr key={r.id}>
+                    <td style={{fontWeight:800}}>{r.name}</td>
+                    <td className="small muted">{r.subject||'—'}</td>
+                    <td className="small">{r.phone||'—'}</td>
+                    <td>{fmtMoney(r.monthlyRent)}</td>
+                    <td>
+                      {isPaidThisMonth
+                        ? <span className="badge badge-green">مدفوع — {fmtMoney(rec.amount)}</span>
+                        : <span className="badge badge-rose">لسه ماخدتش</span>}
+                    </td>
+                    <td>
+                      <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                        {isPaidThisMonth
+                          ? (isAdmin && <button className="btn btn-ghost btn-sm" onClick={()=>cancelPaid(r)}>إلغاء السداد</button>)
+                          : <button className="btn btn-primary btn-sm" onClick={()=>setPayingFor(r)}>💰 تسجيل السداد</button>}
+                        {isAdmin && <button className="btn btn-ghost btn-sm" onClick={()=>setEditingRenter(r)}>تعديل</button>}
+                        {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>removeRenter(r)}>حذف</button>}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {editingRenter && (
+        <Modal title={editingRenter.id?'تعديل بيانات المدرس المستأجر':'مدرس مستأجر جديد'} onClose={()=>setEditingRenter(null)}>
+          <RenterForm renter={editingRenter} onCancel={()=>setEditingRenter(null)} onSave={saveRenter} />
+        </Modal>
+      )}
+      {payingFor && (
+        <Modal title={`تسجيل سداد الإيجار — ${payingFor.name}`} onClose={()=>setPayingFor(null)}>
+          <RenterPaymentForm renter={payingFor} onCancel={()=>setPayingFor(null)} onSave={(amount)=>markPaid(payingFor, amount)} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // Same-day attendance/absence WhatsApp messages, sent right from the attendance grid
 // (separate from the QR/face check-in confirmation) — always signed with the teacher's name.
 function buildAttendanceConfirmWaLink(student, group, teacher, checkinTime){
@@ -2274,6 +2427,37 @@ function TodayAbsencesPanel({students,groups,teachers,attendance,persistAttendan
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+// ============================= المتابعة (merged: attendance + scan + faces + codes + grades + monthly reports) =============================
+// Everything to do with following up a student session-to-session lives in one tab now:
+// take attendance by hand, by scanning a code, or by face recognition; print/manage the
+// codes themselves; record grades; and pull the monthly report — all one click apart.
+const FOLLOWUP_SUBTABS = [
+  {id:'attendance', label:'الحضور والغياب'},
+  {id:'scan', label:'تسجيل حضور بالكود'},
+  {id:'faces', label:'التعرف على الوجه'},
+  {id:'codes', label:'أكواد الطلاب'},
+  {id:'grades', label:'الدرجات'},
+  {id:'reports', label:'التقارير الشهرية'},
+];
+function FollowupTab(props){
+  const [sub,setSub] = useState('attendance');
+  return (
+    <div>
+      <div className="chip-row" style={{marginBottom:18}}>
+        {FOLLOWUP_SUBTABS.map(s=>(
+          <span key={s.id} className={"chip "+(sub===s.id?'active':'')} onClick={()=>setSub(s.id)}>{s.label}</span>
+        ))}
+      </div>
+      {sub==='attendance' && <AttendanceTab {...props} />}
+      {sub==='scan' && <ScanAttendanceTab {...props} />}
+      {sub==='faces' && <FaceAttendanceTab {...props} />}
+      {sub==='codes' && <StudentCodesTab {...props} />}
+      {sub==='grades' && <GradesTab {...props} />}
+      {sub==='reports' && <ReportsTab {...props} />}
     </div>
   );
 }
@@ -3904,7 +4088,7 @@ function CenterScheduleWidget(){
 }
 
 const TRASH_COLLECTION_LABELS = {
-  students:'طالب', groups:'مجموعة', teachers:'مدرس', privateLessons:'باقة دروس خصوصية'
+  students:'طالب', groups:'مجموعة', teachers:'مدرس', privateLessons:'باقة دروس خصوصية', renters:'مدرس مستأجر'
 };
 
 // Restores or permanently deletes items that were moved to trash (see removeWithTrash).
@@ -4010,7 +4194,7 @@ function TeacherProfileTab({teachers,groups,students,attendance,grades,payments,
               </table>
             );
           })()}
-          <div style={{marginTop:14}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('attendance')}>الذهاب لتسجيل حضور جديد →</button></div>
+          <div style={{marginTop:14}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('followup')}>الذهاب لتسجيل حضور جديد →</button></div>
         </div>
       )}
 
@@ -4034,7 +4218,7 @@ function TeacherProfileTab({teachers,groups,students,attendance,grades,payments,
               </table>
             );
           })()}
-          <div style={{marginTop:14}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('grades')}>الذهاب لإدارة الدرجات →</button></div>
+          <div style={{marginTop:14}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('followup')}>الذهاب لإدارة الدرجات →</button></div>
         </div>
       )}
 
@@ -4457,8 +4641,11 @@ function InventoryView({payments,isAdmin}){
   );
 }
 
-function AccountingTab({teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,teacherPayouts,persistTeacherPayouts,isAdmin}){
-  const [view,setView] = useState('expenses'); // expenses | shares | daily | treasury
+function AccountingTab({teachers,groups,students,persistStudents,attendance,payments,persistPayments,expenses,persistExpenses,privateLessons,groupById,currentMonth,refunds,persistRefunds,teacherPayouts,persistTeacherPayouts,isAdmin,setReceiptData,actorRef,renters,renterPayments}){
+  // secretary only ever needs the two non-aggregated day-to-day views (student dues +
+  // daily cash list); every other view here is aggregated financial data, admin-only —
+  // same restriction this tab always had, just now living alongside the shared views.
+  const [view,setView] = useState(isAdmin ? 'expenses' : 'payments'); // expenses | shares | daily | treasury | notebooks | inventory | payments | dailyCash
   const [month,setMonth] = useState(currentMonth);
   const [day,setDay] = useState(todayISO());
   const [creating,setCreating] = useState(null);
@@ -4475,7 +4662,12 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   const totalRefunds = monthRefundsList.reduce((s,r)=>s+(Number(r.amount)||0),0);
   const monthPayoutsList = (teacherPayouts||[]).filter(p=>p.date && p.date.startsWith(month));
   const totalPayouts = monthPayoutsList.reduce((s,p)=>s+(Number(p.amount)||0),0);
-  const treasuryNet = monthRevenue - totalRefunds - totalPayouts - totalExpenses;
+  // Rent collected from outside teachers renting the space — personal income to the owner
+  // (see ownerBlock below), but still real cash through the drawer, so it counts in the
+  // treasury total too.
+  const monthRenterPaymentsList = (renterPayments||[]).filter(p=>p.month===month && p.paid);
+  const totalRenterRevenue = monthRenterPaymentsList.reduce((s,p)=>s+(Number(p.amount)||0),0);
+  const treasuryNet = monthRevenue + totalRenterRevenue - totalRefunds - totalPayouts - totalExpenses;
 
   const savePayout = (data) => {
     const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
@@ -4527,8 +4719,8 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
       .filter(p=>p.teacherId===owner.id && p.purchaseDate && p.purchaseDate.startsWith(month))
       .reduce((s,p)=>s+(Number(p.pricePerPackage)||0),0);
     const ownerExpenses = monthExpenses.filter(e=>e.owner===owner.id).reduce((s,e)=>s+(Number(e.amount)||0),0);
-    const ownerNet = ownerGroupRevenue + ownerPrivateRevenue - ownerExpenses;
-    ownerBlock = {teacher:owner, ownerGroupRevenue, ownerPrivateRevenue, ownerExpenses, ownerNet};
+    const ownerNet = ownerGroupRevenue + ownerPrivateRevenue + totalRenterRevenue - ownerExpenses;
+    ownerBlock = {teacher:owner, ownerGroupRevenue, ownerPrivateRevenue, ownerRentRevenue: totalRenterRevenue, ownerExpenses, ownerNet};
   }
 
   const academyNetProfit = academyCutFromTeachers + (ownerBlock?ownerBlock.ownerNet:0) - totalSharedExpenses;
@@ -4562,19 +4754,24 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   return (
     <div>
       <div className="topbar">
-        <div><h1>الحسابات</h1><div className="date">مصروفات تشغيلية، نسب المدرسين، وصافي الربح — عرض الأدمن فقط</div></div>
+        <div><h1>الحسابات</h1><div className="date">{isAdmin ? 'المصروفات، الخزينة اليومية، مصروفات تشغيلية، نسب المدرسين، وصافي الربح' : 'تسجيل مصروفات الطلاب ومتابعة الخزينة اليومية'}</div></div>
       </div>
 
       <div className="chip-row" style={{marginBottom:16}}>
-        <span className={"chip "+(view==='expenses'?'active':'')} onClick={()=>setView('expenses')}>مصروفات تشغيلية</span>
-        <span className={"chip "+(view==='shares'?'active':'')} onClick={()=>setView('shares')}>نسب المدرسين وصافي الربح</span>
-        <span className={"chip "+(view==='daily'?'active':'')} onClick={()=>setView('daily')}>تقرير يومي مفصل</span>
-        <span className={"chip "+(view==='treasury'?'active':'')} onClick={()=>setView('treasury')}>💰 تقرير الخزينة</span>
-        <span className={"chip "+(view==='notebooks'?'active':'')} onClick={()=>setView('notebooks')}>📓 إيراد المذكرات</span>
-        <span className={"chip "+(view==='inventory'?'active':'')} onClick={()=>setView('inventory')}>🧾 الجرد</span>
+        <span className={"chip "+(view==='payments'?'active':'')} onClick={()=>setView('payments')}>৳ المصروفات (اشتراكات الطلاب)</span>
+        <span className={"chip "+(view==='dailyCash'?'active':'')} onClick={()=>setView('dailyCash')}>💰 الخزينة اليومية</span>
+        {isAdmin && <span className={"chip "+(view==='expenses'?'active':'')} onClick={()=>setView('expenses')}>مصروفات تشغيلية</span>}
+        {isAdmin && <span className={"chip "+(view==='shares'?'active':'')} onClick={()=>setView('shares')}>نسب المدرسين وصافي الربح</span>}
+        {isAdmin && <span className={"chip "+(view==='daily'?'active':'')} onClick={()=>setView('daily')}>تقرير يومي مفصل</span>}
+        {isAdmin && <span className={"chip "+(view==='treasury'?'active':'')} onClick={()=>setView('treasury')}>💰 تقرير الخزينة</span>}
+        {isAdmin && <span className={"chip "+(view==='notebooks'?'active':'')} onClick={()=>setView('notebooks')}>📓 إيراد المذكرات</span>}
+        {isAdmin && <span className={"chip "+(view==='inventory'?'active':'')} onClick={()=>setView('inventory')}>🧾 الجرد</span>}
       </div>
 
-      {view==='notebooks' && (
+      {view==='payments' && <PaymentsTab {...{students,groups,teachers,persistStudents,payments,persistPayments,groupById,setReceiptData,isAdmin,refunds,persistRefunds,actorRef}} />}
+      {view==='dailyCash' && <DailyCashTab {...{students,payments}} />}
+
+      {isAdmin && view==='notebooks' && (
         <div>
           {(() => {
             const preSept = payments
@@ -4659,9 +4856,9 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
         </div>
       )}
 
-      {view==='inventory' && <InventoryView payments={payments} isAdmin={isAdmin} />}
+      {isAdmin && view==='inventory' && <InventoryView payments={payments} isAdmin={isAdmin} />}
 
-      {view==='expenses' && (
+      {isAdmin && view==='expenses' && (
         <div>
           <div className="toolbar">
             <input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} />
@@ -4688,7 +4885,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
         </div>
       )}
 
-      {view==='shares' && (
+      {isAdmin && view==='shares' && (
         <div>
           <div className="toolbar"><input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} /></div>
           <div className="grid grid-4" style={{marginBottom:18}}>
@@ -4739,11 +4936,12 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
             <div className="card">
               <div className="section-title">حساب {ownerBlock.teacher.name} (صاحب الأكاديمية — منفصل عن نظام النسبة)</div>
               <table>
-                <thead><tr><th>إيرادات مجموعاته</th><th>إيرادات الدروس الخصوصية</th><th>مصروفاته الخاصة (مذكرات..)</th><th>صافي حسابه</th></tr></thead>
+                <thead><tr><th>إيرادات مجموعاته</th><th>إيرادات الدروس الخصوصية</th><th>إيجار المدرسين المستأجرين</th><th>مصروفاته الخاصة (مذكرات..)</th><th>صافي حسابه</th></tr></thead>
                 <tbody>
                   <tr>
                     <td>{fmtMoney(ownerBlock.ownerGroupRevenue)}</td>
                     <td>{fmtMoney(ownerBlock.ownerPrivateRevenue)}</td>
+                    <td>{fmtMoney(ownerBlock.ownerRentRevenue)}</td>
                     <td className="small muted">−{fmtMoney(ownerBlock.ownerExpenses)}</td>
                     <td style={{fontWeight:900}}>{fmtMoney(ownerBlock.ownerNet)}</td>
                   </tr>
@@ -4755,7 +4953,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
         </div>
       )}
 
-      {view==='daily' && (
+      {isAdmin && view==='daily' && (
         <div>
           <div className="toolbar"><input type="date" style={{maxWidth:180}} value={day} onChange={e=>setDay(e.target.value)} /></div>
           <div className="grid grid-3" style={{marginBottom:18}}>
@@ -4780,7 +4978,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
         </div>
       )}
 
-      {view==='treasury' && (
+      {isAdmin && view==='treasury' && (
         <div>
           <div className="toolbar"><input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} /></div>
 
@@ -4789,6 +4987,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
             <table>
               <tbody>
                 <tr><td>الإيراد المحصّل</td><td style={{fontWeight:800,color:'var(--green)'}}>+{fmtMoney(monthRevenue)}</td></tr>
+                <tr><td>إيجار المدرسين المستأجرين</td><td style={{fontWeight:800,color:'var(--green)'}}>+{fmtMoney(totalRenterRevenue)}</td></tr>
                 <tr><td>المبالغ المستردة</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalRefunds)}</td></tr>
                 <tr><td>مستحقات مصروفة للمدرسين</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalPayouts)}</td></tr>
                 <tr><td>المصروفات (كل الأنواع)</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalExpenses)}</td></tr>
