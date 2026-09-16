@@ -1040,7 +1040,7 @@ function NotificationBell({students}){
     <div style={{position:'relative'}}>
       <button className="btn btn-ghost btn-sm" onClick={()=>setOpen(!open)}>🔔 إشعارات جاهزة{items.length>0?` (${items.length})`:''}</button>
       {open && (
-        <div className="card" style={{position:'absolute',left:0,top:'110%',width:320,maxHeight:400,overflow:'auto',zIndex:80,boxShadow:'0 12px 30px rgba(0,0,0,.25)'}}>
+        <div className="card" style={{position:'absolute',left:0,top:'110%',width:320,maxWidth:'calc(100vw - 32px)',maxHeight:400,overflow:'auto',zIndex:80,boxShadow:'0 12px 30px rgba(0,0,0,.25)'}}>
           {items.length===0 ? <div className="small muted">مفيش إشعارات معلّقة دلوقتي</div> : items.map(item=>{
             const student = students.find(s=>s.id===item.studentId);
             return (
@@ -1276,7 +1276,9 @@ function App(){
   },[attendance]);
 
   const monthRevenue = useMemo(()=>{
-    return payments.filter(p=>p.month===currentMonth && p.paid).reduce((sum,p)=>sum+(Number(p.amount)||0),0);
+    // Any amount actually paid counts immediately, partial payments included — matches
+    // the "الحسابات" tab so the dashboard number and the accounts number always agree.
+    return payments.filter(p=>p.month===currentMonth).reduce((sum,p)=>sum+normalizePaymentRecord(p, p.amountDue||0).amountPaid,0);
   },[payments,currentMonth]);
 
   const monthPending = useMemo(()=>{
@@ -1510,8 +1512,8 @@ function LoginScreen(){
   };
 
   return (
-    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--cream)'}}>
-      <form onSubmit={submit} className="card" style={{width:340,textAlign:'center'}}>
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--cream)',padding:16}}>
+      <form onSubmit={submit} className="card" style={{width:340,maxWidth:'calc(100vw - 32px)',textAlign:'center'}}>
         <div style={{display:'flex',justifyContent:'center',marginBottom:14}}>{LOGO(70)}</div>
         <div style={{fontWeight:900,fontSize:17,marginBottom:18}}>تسجيل الدخول لنظام SamySchool</div>
         <Field label="الإيميل"><input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="admin@samyschoo.local" /></Field>
@@ -2100,13 +2102,17 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
       <div className="card">
         <div className="section-title">فريق المدرسين</div>
         <table>
-          <thead><tr><th>الاسم</th><th>المادة</th><th>عدد المجموعات</th><th></th></tr></thead>
+          <thead><tr><th>الاسم</th><th>المادة</th><th>عدد المجموعات</th><th>عدد الطلاب</th><th></th></tr></thead>
           <tbody>
-            {teachers.map(t=>(
+            {teachers.map(t=>{
+              const tGroups = groups.filter(g=>g.teacherId===t.id);
+              const studentCount = tGroups.reduce((sum,g)=> sum + studentsInGroup(g.id).length, 0);
+              return (
               <tr key={t.id}>
                 <td>{t.name}</td>
                 <td>{t.subject}</td>
-                <td>{groups.filter(g=>g.teacherId===t.id).length}</td>
+                <td>{tGroups.length}</td>
+                <td><span className="badge badge-green">{studentCount}</span></td>
                 <td>
                   {isAdmin && (
                     <div style={{display:'flex',gap:6}}>
@@ -2116,7 +2122,8 @@ function GroupsTab({groups,teachers,persistGroups,persistTeachers,studentsInGrou
                   )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -2247,10 +2254,12 @@ function RentersPanel({renters,persistRenters,renterPayments,persistRenterPaymen
   const markPaid = (renter, amount) => {
     const existing = recordFor(renter.id);
     const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
+    const nowISO = new Date().toISOString();
     const payload = {
       id: existing?existing.id:uid(), renterId:renter.id, month,
       amount: Number(amount)||0, paid:true,
-      paidDate: todayISO(), paidAt: new Date().toISOString(), paidBy: recipientLabel,
+      paidDate: todayISO(), paidAt: nowISO, paidBy: recipientLabel,
+      history: [...(existing?.history||[]), {date:todayISO(), amount:Number(amount)||0, at:nowISO, by:recipientLabel}],
     };
     if(existing) persistRenterPayments(renterPayments.map(p=>p.id===existing.id?payload:p));
     else persistRenterPayments([...renterPayments,payload]);
@@ -2260,7 +2269,7 @@ function RentersPanel({renters,persistRenters,renterPayments,persistRenterPaymen
     const existing = recordFor(renter.id);
     if(!existing) return;
     if(!confirm('إلغاء تسجيل سداد الإيجار لهذا الشهر؟')) return;
-    persistRenterPayments(renterPayments.map(p=>p.id===existing.id?{...p, paid:false, amount:0, paidDate:null, paidAt:null, paidBy:null}:p));
+    persistRenterPayments(renterPayments.map(p=>p.id===existing.id?{...p, paid:false, amount:0, paidDate:null, paidAt:null, paidBy:null, history:[]}:p));
   };
 
   const monthTotal = renterPayments.filter(p=>p.month===month && p.paid).reduce((s,p)=>s+(Number(p.amount)||0),0);
@@ -2810,6 +2819,42 @@ function normalizeNotebookStatus(student){
   return {due, paid, remaining: Math.max(0,due-paid), isPaid: due<=0 ? true : paid>=due};
 }
 
+// ============================= Dated receipts (fixes: partial/split payments invisible in daily cash & the jard) =============================
+// A payment record (tuition/notebook/rent) only ever stored the RUNNING total paid so far,
+// with one paidDate that gets overwritten by whichever installment was recorded most recently.
+// So a partial payment (or a second installment on a different day) had no way to show up in
+// anything that asks "how much cash actually came in on day X" — the daily cash tab and the
+// jard/inventory reconciliation both filtered on `paid` (fully settled) and read the cumulative
+// amount, so partial money was invisible there even though it was already physically collected.
+// Fix: every place that records money received also appends a small dated entry to a `history`
+// array on the same record ({date, amount, at, by} — just that installment's own amount), and
+// everything that needs "cash received on day X" sums from these entries instead. Records saved
+// before this existed have no history yet, so we fall back to synthesizing one entry from the
+// old cumulative fields (dated to whenever that record was last touched) — still counted, just
+// not split by installment the way new payments going forward will be.
+function receiptEntries(records, {historyKey='history', dateField, amountField, atField, byField, refField}){
+  const out = [];
+  (records||[]).forEach(r=>{
+    const hist = r[historyKey];
+    if(hist && hist.length){
+      hist.forEach(h=> out.push({date:h.date, amount:Number(h.amount)||0, at:h.at, by:h.by, refId:r[refField]||r.id, month:r.month}));
+    }else{
+      const amt = Number(r[amountField])||0;
+      if(amt>0 && r[dateField]) out.push({date:r[dateField], amount:amt, at:r[atField], by:r[byField], refId:r[refField]||r.id, month:r.month});
+    }
+  });
+  return out;
+}
+function tuitionReceipts(payments){
+  return receiptEntries(payments, {dateField:'paidDate', amountField:'amountPaid', atField:'paidAt', byField:'paidBy', refField:'studentId'});
+}
+function notebookReceipts(students){
+  return receiptEntries(students, {historyKey:'notebookHistory', dateField:'notebookPaidDate', amountField:'notebookAmountPaid', atField:'notebookPaidAt', byField:'notebookPaidBy', refField:'id'});
+}
+function rentReceipts(renterPayments){
+  return receiptEntries(renterPayments, {dateField:'paidDate', amountField:'amount', atField:'paidAt', byField:'paidBy', refField:'renterId'});
+}
+
 // The school year at the center started 1 September 2026 — nothing before that is tuition.
 // Any payment recorded earlier than this was actually a holiday notebook-reservation deposit
 // for Mr. Mohamed Samy's English notebooks, not a monthly subscription, so every month-based
@@ -2966,12 +3011,16 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
     const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
     const receiptNo = (existing && existing.receiptNo) || nextReceiptNo();
     const nowFullyPaid = due<=0 ? true : newPaid>=due;
+    const nowISO = new Date().toISOString();
     const payload = {
       id: existing?existing.id:uid(), studentId:student.id, month,
       amountDue: due, amountPaid: newPaid, amount: newPaid,
       paid: nowFullyPaid,
-      paidDate: todayISO(), paidAt: new Date().toISOString(), paidBy: recipientLabel,
+      paidDate: todayISO(), paidAt: nowISO, paidBy: recipientLabel,
       receiptNo,
+      // one dated entry per installment, so partial/split payments still show up correctly
+      // in the daily cash tab, the jard, and month totals (see receiptEntries above).
+      history: [...(existing?.history||[]), {date:todayISO(), amount:amountToAdd, at:nowISO, by:recipientLabel}],
     };
     if(existing) persistPayments(payments.map(p=>p.id===existing.id?payload:p));
     else persistPayments([...payments, payload]);
@@ -2983,19 +3032,27 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
     const existing = recordFor(student.id);
     if(!existing) return;
     if(!confirm('إلغاء تسجيل السداد لهذا الشهر بالكامل؟')) return;
-    persistPayments(payments.map(p=>p.id===existing.id?{...p, amountPaid:0, amount:0, paid:false, paidDate:null, paidAt:null, paidBy:null}:p));
+    persistPayments(payments.map(p=>p.id===existing.id?{...p, amountPaid:0, amount:0, paid:false, paidDate:null, paidAt:null, paidBy:null, history:[]}:p));
   };
 
   const recordNotebookPayment = (student, amountToAdd, dueOverride) => {
     const nb = normalizeNotebookStatus(student);
     const due = dueOverride!==undefined ? dueOverride : nb.due;
     const newPaid = nb.paid + amountToAdd;
-    persistStudents(students.map(s=>s.id===student.id?{...s, notebookFeeAmount:due, notebookAmountPaid:newPaid, notebookPaid: due>0 && newPaid>=due, notebookPaidDate: amountToAdd>0?todayISO():s.notebookPaidDate}:s));
+    const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
+    const nowISO = new Date().toISOString();
+    persistStudents(students.map(s=>s.id===student.id?{
+      ...s, notebookFeeAmount:due, notebookAmountPaid:newPaid, notebookPaid: due>0 && newPaid>=due,
+      notebookPaidDate: amountToAdd>0?todayISO():s.notebookPaidDate,
+      // same per-installment history as tuition, so notebook cash counts in the daily cash
+      // tab / jard / accounts on the day it was actually received, not just the total-ever view.
+      notebookHistory: amountToAdd>0 ? [...(s.notebookHistory||[]), {date:todayISO(), amount:amountToAdd, at:nowISO, by:recipientLabel}] : (s.notebookHistory||[]),
+    }:s));
     setNotebookPayFor(null);
   };
   const resetNotebookPayment = (student) => {
     if(!confirm('إلغاء تسجيل دفع المذكرة بالكامل؟')) return;
-    persistStudents(students.map(s=>s.id===student.id?{...s, notebookAmountPaid:0, notebookPaid:false, notebookPaidDate:null}:s));
+    persistStudents(students.map(s=>s.id===student.id?{...s, notebookAmountPaid:0, notebookPaid:false, notebookPaidDate:null, notebookHistory:[]}:s));
   };
 
   const printReceipt = (student) => {
@@ -4140,6 +4197,14 @@ function TeacherProfileTab({teachers,groups,students,attendance,grades,payments,
         </select>
       </div>
 
+      {teacher && (
+        <div className="card" style={{marginBottom:18,display:'flex',gap:24,flexWrap:'wrap',alignItems:'center'}}>
+          <div><div className="small muted">المدرس</div><div style={{fontWeight:900,fontSize:15}}>{teacher.name}{teacher.subject?` — ${teacher.subject}`:''}</div></div>
+          <div><div className="small muted">عدد المجموعات</div><div style={{fontWeight:900,fontSize:15}}>{myGroups.length}</div></div>
+          <div><div className="small muted">إجمالي عدد الطلاب</div><span className="badge badge-green" style={{fontSize:14,fontWeight:900}}>{myStudents.length}</span></div>
+        </div>
+      )}
+
       <div className="chip-row" style={{marginBottom:18}}>
         {TEACHER_SUBTABS.map(s=>(
           <span key={s.id} className={"chip "+(sub===s.id?'active':'')} onClick={()=>setSub(s.id)}>{s.label}</span>
@@ -4370,12 +4435,14 @@ function buildTeacherPaymentReportText(teacher, groups, students, payments, mont
   const myGroupIds = new Set(myGroups.map(g=>g.id));
   const myStudents = students.filter(s=>myGroupIds.has(s.groupId));
 
+  // Matches groupRevenue() in AccountingTab: any amount actually paid counts toward the
+  // teacher's share right away, including a partial payment — not only once fully settled.
   const rows = myStudents.map(s=>{
     const g = groups.find(x=>x.id===s.groupId);
     const p = payments.find(p=>p.studentId===s.id && p.month===month);
-    const paid = !!(p && p.paid);
-    return {student:s, group:g, paid, amount: paid?(Number(p.amount)||0):0, paidDate: paid?p.paidDate:null};
-  }).sort((a,b)=> (b.paid?1:0)-(a.paid?1:0));
+    const norm = normalizePaymentRecord(p, studentFee(s,g));
+    return {student:s, group:g, fullyPaid:norm.paid, partiallyPaid: norm.amountPaid>0 && !norm.paid, amount:norm.amountPaid, due:norm.amountDue, paidDate: p?p.paidDate:null};
+  }).sort((a,b)=> (b.amount>0?1:0)-(a.amount>0?1:0));
 
   const total = rows.reduce((s,r)=>s+r.amount,0);
   const avgPct = myGroups.length ? Math.round(myGroups.reduce((s,g)=>s+(Number(g.commissionPercent)||70),0)/myGroups.length) : 70;
@@ -4390,17 +4457,20 @@ function buildTeacherPaymentReportText(teacher, groups, students, payments, mont
     ``,
   ];
   rows.forEach((r,i)=>{
-    lines.push(`${i+1}. ${r.student.name}${r.group?' ('+r.group.name+')':''} — ${r.paid?`${fmtMoney(r.amount)} بتاريخ ${r.paidDate}`:'لم يسدد بعد ⚠️'}`);
+    const status = r.fullyPaid ? `${fmtMoney(r.amount)} بتاريخ ${r.paidDate}`
+      : r.partiallyPaid ? `⚠️ دفع جزئي: ${fmtMoney(r.amount)} من ${fmtMoney(r.due)}`
+      : 'لم يسدد بعد ⚠️';
+    lines.push(`${i+1}. ${r.student.name}${r.group?' ('+r.group.name+')':''} — ${status}`);
   });
   lines.push(
     ``, `────────────`,
-    `💰 إجمالي التحصيل: ${fmtMoney(total)}`,
+    `💰 إجمالي التحصيل (بما فيه الدفعات الجزئية): ${fmtMoney(total)}`,
     `✅ نصيبك (${avgPct}%): ${fmtMoney(share)}`,
     `🏫 نصيب الأكاديمية: ${fmtMoney(academyCut)}`,
     `────────────`, ``,
     `بالتوفيق 🌟`
   );
-  return {text: lines.join('\n'), total, share, academyCut, unpaidCount: rows.filter(r=>!r.paid).length};
+  return {text: lines.join('\n'), total, share, academyCut, unpaidCount: rows.filter(r=>r.amount<=0).length};
 }
 function teacherReportWaLink(teacher, reportText){
   const phone = normalizeEgyptPhone(teacher.phone);
@@ -4411,15 +4481,31 @@ function teacherReportWaLink(teacher, reportText){
 // Daily cash view for the secretary (and admin) — deliberately shows ONE day at a time,
 // never a summed range, so it always matches "how much cash should be in the drawer today"
 // rather than a running total that could be misread as a bigger number than it is.
-function DailyCashTab({students,payments}){
+function DailyCashTab({students,payments,renters,renterPayments}){
   const [day,setDay] = useState(todayISO());
-  const dayPayments = payments.filter(p=>p.paid && p.paidDate===day).sort((a,b)=>(a.paidAt||'').localeCompare(b.paidAt||''));
-  const dayTotal = dayPayments.reduce((s,p)=>s+(Number(p.amount)||0),0);
+
+  // Every dated installment that landed on this exact day — tuition, notebook fees, and
+  // rent — each as its own row, so a partial payment (or a second installment paid on a
+  // different day than the first) shows up on the day the cash actually came in, not just
+  // whichever day the record happened to be last touched.
+  const dayEntries = useMemo(()=>{
+    const tuition = tuitionReceipts(payments).filter(e=>e.date===day).map(e=>({...e, kind:'tuition'}));
+    const notebooks = notebookReceipts(students).filter(e=>e.date===day).map(e=>({...e, kind:'notebook'}));
+    const rent = rentReceipts(renterPayments).filter(e=>e.date===day).map(e=>({...e, kind:'rent'}));
+    return [...tuition, ...notebooks, ...rent].sort((a,b)=>(a.at||'').localeCompare(b.at||''));
+  },[payments,students,renterPayments,day]);
+  const dayTotal = dayEntries.reduce((s,e)=>s+e.amount,0);
+
+  const nameFor = (e) => {
+    if(e.kind==='rent') return (renters||[]).find(r=>r.id===e.refId)?.name || '—';
+    return students.find(s=>s.id===e.refId)?.name || '—';
+  };
+  const kindLabel = (k) => k==='notebook' ? '📓 مذكرة' : k==='rent' ? '🏠 إيجار' : '৳ اشتراك';
 
   return (
     <div>
       <div className="topbar">
-        <div><h1>الخزينة اليومية</h1><div className="date">مين دفع، وكام، والإجمالي — ليوم واحد بس في كل مرة</div></div>
+        <div><h1>الخزينة اليومية</h1><div className="date">مين دفع، وكام، والإجمالي — ليوم واحد بس في كل مرة (اشتراكات + مذكرات + إيجارات)</div></div>
       </div>
       <div className="toolbar">
         <input type="date" style={{maxWidth:180}} value={day} onChange={e=>setDay(e.target.value)} />
@@ -4430,21 +4516,21 @@ function DailyCashTab({students,payments}){
         <div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(dayTotal)}</div>
       </div>
       <div className="card">
-        <div className="section-title">مدفوعات {day} ({dayPayments.length})</div>
-        {dayPayments.length===0 ? <Empty icon="৳" text="لا توجد مدفوعات مسجلة في هذا اليوم" /> : (
+        <div className="section-title">مقبوضات {day} ({dayEntries.length})</div>
+        {dayEntries.length===0 ? <Empty icon="৳" text="لا توجد مقبوضات مسجلة في هذا اليوم" /> : (
           <table>
-            <thead><tr><th>الطالب</th><th>الشهر</th><th>الوقت</th><th>بواسطة</th><th>المبلغ</th></tr></thead>
+            <thead><tr><th>الاسم</th><th>النوع</th><th>الشهر</th><th>الوقت</th><th>بواسطة</th><th>المبلغ</th></tr></thead>
             <tbody>
-              {dayPayments.map(p=>{
-                const st = students.find(s=>s.id===p.studentId);
-                const time = p.paidAt ? new Date(p.paidAt).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'}) : '—';
+              {dayEntries.map((e,i)=>{
+                const time = e.at ? new Date(e.at).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'}) : '—';
                 return (
-                  <tr key={p.id}>
-                    <td className="student-row"><span className="avatar">{initials(st?st.name:'?')}</span>{st?st.name:'—'}</td>
-                    <td>{monthLabel(p.month)}</td>
+                  <tr key={i}>
+                    <td className="student-row"><span className="avatar">{initials(nameFor(e))}</span>{nameFor(e)}</td>
+                    <td className="small">{kindLabel(e.kind)}</td>
+                    <td>{e.month?monthLabel(e.month):'—'}</td>
                     <td className="small muted">{time}</td>
-                    <td className="small muted">{p.paidBy||'—'}</td>
-                    <td style={{fontWeight:800}}>{fmtMoney(p.amount)}</td>
+                    <td className="small muted">{e.by||'—'}</td>
+                    <td style={{fontWeight:800}}>{fmtMoney(e.amount)}</td>
                   </tr>
                 );
               })}
@@ -4461,7 +4547,7 @@ function DailyCashTab({students,payments}){
 // plus any InstaPay/Vodafone Cash transfers — and compares it against what the system says
 // was collected that day (from the payments records). Doc id = the date itself, so there's
 // exactly one inventory record per day, easy to upsert without a query.
-function InventoryView({payments,isAdmin}){
+function InventoryView({payments,students,renterPayments,isAdmin}){
   const [tab,setTab] = useState('daily'); // 'daily' | 'monthly'
   const [date,setDate] = useState(todayISO());
   const [month,setMonth] = useState(monthKey());
@@ -4488,7 +4574,15 @@ function InventoryView({payments,isAdmin}){
     return unsub;
   },[month,tab]);
 
-  const systemCollected = (d) => payments.filter(p=>p.paid && p.paidDate===d).reduce((s,p)=>s+(Number(p.amount)||0),0);
+  // Money the system says came in on day `d` — tuition + notebooks + rent, each counted
+  // on the day it was actually received (see receiptEntries), so a partial/split payment
+  // no longer creates a phantom mismatch against what was physically counted that day.
+  const systemCollected = (d) => {
+    const tuition = tuitionReceipts(payments).filter(e=>e.date===d).reduce((s,e)=>s+e.amount,0);
+    const notebooks = notebookReceipts(students||[]).filter(e=>e.date===d).reduce((s,e)=>s+e.amount,0);
+    const rent = rentReceipts(renterPayments||[]).filter(e=>e.date===d).reduce((s,e)=>s+e.amount,0);
+    return tuition + notebooks + rent;
+  };
 
   const save = () => {
     if(!record) return;
@@ -4657,7 +4751,9 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   const totalExpenses = monthExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
   const sharedExpenses = monthExpenses.filter(e=>!e.owner || e.owner==='academy');
   const totalSharedExpenses = sharedExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
-  const monthRevenue = payments.filter(p=>p.month===month && p.paid).reduce((s,p)=>s+(Number(p.amount)||0),0);
+  // Any money actually paid toward this billing month counts immediately — including a
+  // partial payment — not just students who've settled in full (see normalizePaymentRecord).
+  const monthRevenue = payments.filter(p=>p.month===month).reduce((s,p)=>s+normalizePaymentRecord(p, p.amountDue||0).amountPaid,0);
   const monthRefundsList = (refunds||[]).filter(r=>r.date && r.date.startsWith(month));
   const totalRefunds = monthRefundsList.reduce((s,r)=>s+(Number(r.amount)||0),0);
   const monthPayoutsList = (teacherPayouts||[]).filter(p=>p.date && p.date.startsWith(month));
@@ -4667,7 +4763,12 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   // treasury total too.
   const monthRenterPaymentsList = (renterPayments||[]).filter(p=>p.month===month && p.paid);
   const totalRenterRevenue = monthRenterPaymentsList.reduce((s,p)=>s+(Number(p.amount)||0),0);
-  const treasuryNet = monthRevenue + totalRenterRevenue - totalRefunds - totalPayouts - totalExpenses;
+  // Notebook fees are owner-only (Mr. Mohamed Samy's students) — computed early (by actual
+  // receipt date, not the all-time lifetime total the "notebooks" view below shows) so both
+  // the treasury total and the owner's net-income block include this month's notebook cash.
+  const ownerStudentIds = new Set(students.filter(s=>{ const g=groupById(s.groupId); const t=g?teachers.find(x=>x.id===g.teacherId):null; return t&&t.isOwner; }).map(s=>s.id));
+  const monthNotebookRevenue = notebookReceipts(students).filter(e=>e.date && e.date.startsWith(month) && ownerStudentIds.has(e.refId)).reduce((s,e)=>s+e.amount,0);
+  const treasuryNet = monthRevenue + totalRenterRevenue + monthNotebookRevenue - totalRefunds - totalPayouts - totalExpenses;
 
   const savePayout = (data) => {
     const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
@@ -4675,13 +4776,15 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
     setPayingOut(null);
   };
 
+  // Per Mohamed's call: a teacher's share is computed on whatever has actually been paid so
+  // far this month — including a partial payment — not only once a student is fully settled.
   const groupRevenue = (t) => {
     const myGroups = groups.filter(g=>g.teacherId===t.id);
     let revenue = 0;
     myGroups.forEach(g=>{
       students.filter(s=>s.groupId===g.id).forEach(s=>{
-        const p = payments.find(p=>p.studentId===s.id && p.month===month && p.paid);
-        if(p) revenue += Number(p.amount)||0;
+        const p = payments.find(p=>p.studentId===s.id && p.month===month);
+        if(p) revenue += normalizePaymentRecord(p, studentFee(s,g)).amountPaid;
       });
     });
     const avgPct = myGroups.length ? myGroups.reduce((s,g)=>s+(Number(g.commissionPercent) || 70),0)/myGroups.length : 70;
@@ -4719,8 +4822,8 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
       .filter(p=>p.teacherId===owner.id && p.purchaseDate && p.purchaseDate.startsWith(month))
       .reduce((s,p)=>s+(Number(p.pricePerPackage)||0),0);
     const ownerExpenses = monthExpenses.filter(e=>e.owner===owner.id).reduce((s,e)=>s+(Number(e.amount)||0),0);
-    const ownerNet = ownerGroupRevenue + ownerPrivateRevenue + totalRenterRevenue - ownerExpenses;
-    ownerBlock = {teacher:owner, ownerGroupRevenue, ownerPrivateRevenue, ownerRentRevenue: totalRenterRevenue, ownerExpenses, ownerNet};
+    const ownerNet = ownerGroupRevenue + ownerPrivateRevenue + totalRenterRevenue + monthNotebookRevenue - ownerExpenses;
+    ownerBlock = {teacher:owner, ownerGroupRevenue, ownerPrivateRevenue, ownerRentRevenue: totalRenterRevenue, ownerNotebookRevenue: monthNotebookRevenue, ownerExpenses, ownerNet};
   }
 
   const academyNetProfit = academyCutFromTeachers + (ownerBlock?ownerBlock.ownerNet:0) - totalSharedExpenses;
@@ -4736,8 +4839,12 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   const dayAttendance = attendance.filter(a=>a.date===day);
   let dayPresent=0, dayAbsent=0;
   dayAttendance.forEach(rec=> Object.values(rec.records||{}).forEach(v=>{ if(v==='present') dayPresent++; else dayAbsent++; }));
-  const dayPayments = payments.filter(p=>p.paid && p.paidDate===day);
-  const dayCollected = dayPayments.reduce((s,p)=>s+(Number(p.amount)||0),0);
+  // Same day-based receipt sum as the daily cash tab / jard — tuition + notebooks + rent,
+  // each counted on the day it actually came in, partial payments included.
+  const dayTuitionReceipts = tuitionReceipts(payments).filter(e=>e.date===day);
+  const dayNotebookReceipts = notebookReceipts(students).filter(e=>e.date===day);
+  const dayRentReceipts = rentReceipts(renterPayments).filter(e=>e.date===day);
+  const dayCollected = dayTuitionReceipts.reduce((s,e)=>s+e.amount,0) + dayNotebookReceipts.reduce((s,e)=>s+e.amount,0) + dayRentReceipts.reduce((s,e)=>s+e.amount,0);
 
   const ownerLabel = (e) => e.owner==='academy' || !e.owner ? 'الأكاديمية (عام)' : (teachers.find(t=>t.id===e.owner)?.name || 'الأكاديمية (عام)');
 
@@ -4745,7 +4852,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   // Uses the same due/paid normalizer as tuition so per-student discounts (a lower
   // notebookFeeAmount) and partial payments both show correctly.
   const notebookStudents = students
-    .filter(s=>{ const g = groupById(s.groupId); const t = g?teachers.find(x=>x.id===g.teacherId):null; return t && t.isOwner; })
+    .filter(s=>ownerStudentIds.has(s.id))
     .map(s=>({student:s, nb: normalizeNotebookStatus(s)}))
     .filter(x=>x.nb.due>0);
   const notebookPaidList = notebookStudents.filter(x=>x.nb.paid>0);
@@ -4769,7 +4876,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
       </div>
 
       {view==='payments' && <PaymentsTab {...{students,groups,teachers,persistStudents,payments,persistPayments,groupById,setReceiptData,isAdmin,refunds,persistRefunds,actorRef}} />}
-      {view==='dailyCash' && <DailyCashTab {...{students,payments}} />}
+      {view==='dailyCash' && <DailyCashTab {...{students,payments,renters,renterPayments}} />}
 
       {isAdmin && view==='notebooks' && (
         <div>
@@ -4856,7 +4963,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
         </div>
       )}
 
-      {isAdmin && view==='inventory' && <InventoryView payments={payments} isAdmin={isAdmin} />}
+      {isAdmin && view==='inventory' && <InventoryView payments={payments} students={students} renterPayments={renterPayments} isAdmin={isAdmin} />}
 
       {isAdmin && view==='expenses' && (
         <div>
@@ -4936,12 +5043,13 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
             <div className="card">
               <div className="section-title">حساب {ownerBlock.teacher.name} (صاحب الأكاديمية — منفصل عن نظام النسبة)</div>
               <table>
-                <thead><tr><th>إيرادات مجموعاته</th><th>إيرادات الدروس الخصوصية</th><th>إيجار المدرسين المستأجرين</th><th>مصروفاته الخاصة (مذكرات..)</th><th>صافي حسابه</th></tr></thead>
+                <thead><tr><th>إيرادات مجموعاته</th><th>إيرادات الدروس الخصوصية</th><th>إيجار المدرسين المستأجرين</th><th>إيراد المذكرات</th><th>مصروفاته الخاصة</th><th>صافي حسابه</th></tr></thead>
                 <tbody>
                   <tr>
                     <td>{fmtMoney(ownerBlock.ownerGroupRevenue)}</td>
                     <td>{fmtMoney(ownerBlock.ownerPrivateRevenue)}</td>
                     <td>{fmtMoney(ownerBlock.ownerRentRevenue)}</td>
+                    <td>{fmtMoney(ownerBlock.ownerNotebookRevenue)}</td>
                     <td className="small muted">−{fmtMoney(ownerBlock.ownerExpenses)}</td>
                     <td style={{fontWeight:900}}>{fmtMoney(ownerBlock.ownerNet)}</td>
                   </tr>
@@ -4962,14 +5070,22 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
             <div className="card"><div className="stat-label">محصّل اليوم</div><div className="stat-value">{fmtMoney(dayCollected)}</div></div>
           </div>
           <div className="card">
-            <div className="section-title">مدفوعات {day}</div>
-            {dayPayments.length===0 ? <Empty icon="৳" text="لا توجد مدفوعات مسجلة في هذا اليوم" /> : (
+            <div className="section-title">مقبوضات {day} (اشتراكات + مذكرات + إيجارات)</div>
+            {(dayTuitionReceipts.length+dayNotebookReceipts.length+dayRentReceipts.length)===0 ? <Empty icon="৳" text="لا توجد مقبوضات مسجلة في هذا اليوم" /> : (
               <table>
-                <thead><tr><th>الطالب</th><th>الشهر</th><th>المبلغ</th></tr></thead>
+                <thead><tr><th>الاسم</th><th>النوع</th><th>الشهر</th><th>المبلغ</th></tr></thead>
                 <tbody>
-                  {dayPayments.map(p=>{
-                    const st = students.find(s=>s.id===p.studentId);
-                    return <tr key={p.id}><td>{st?st.name:'—'}</td><td>{monthLabel(p.month)}</td><td>{fmtMoney(p.amount)}</td></tr>;
+                  {dayTuitionReceipts.map((e,i)=>{
+                    const st = students.find(s=>s.id===e.refId);
+                    return <tr key={'t'+i}><td>{st?st.name:'—'}</td><td className="small">৳ اشتراك</td><td>{monthLabel(e.month)}</td><td>{fmtMoney(e.amount)}</td></tr>;
+                  })}
+                  {dayNotebookReceipts.map((e,i)=>{
+                    const st = students.find(s=>s.id===e.refId);
+                    return <tr key={'n'+i}><td>{st?st.name:'—'}</td><td className="small">📓 مذكرة</td><td>—</td><td>{fmtMoney(e.amount)}</td></tr>;
+                  })}
+                  {dayRentReceipts.map((e,i)=>{
+                    const r = (renters||[]).find(x=>x.id===e.refId);
+                    return <tr key={'r'+i}><td>{r?r.name:'—'}</td><td className="small">🏠 إيجار</td><td>{e.month?monthLabel(e.month):'—'}</td><td>{fmtMoney(e.amount)}</td></tr>;
                   })}
                 </tbody>
               </table>
@@ -4987,6 +5103,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
             <table>
               <tbody>
                 <tr><td>الإيراد المحصّل</td><td style={{fontWeight:800,color:'var(--green)'}}>+{fmtMoney(monthRevenue)}</td></tr>
+                <tr><td>إيراد المذكرات</td><td style={{fontWeight:800,color:'var(--green)'}}>+{fmtMoney(monthNotebookRevenue)}</td></tr>
                 <tr><td>إيجار المدرسين المستأجرين</td><td style={{fontWeight:800,color:'var(--green)'}}>+{fmtMoney(totalRenterRevenue)}</td></tr>
                 <tr><td>المبالغ المستردة</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalRefunds)}</td></tr>
                 <tr><td>مستحقات مصروفة للمدرسين</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalPayouts)}</td></tr>
@@ -5366,7 +5483,7 @@ function FaceAttendanceTab({groups,students,persistStudents,attendance,persistAt
                   <button className="btn btn-ghost" onClick={stopCamera}>إيقاف الكاميرا</button>
                 </div>
               )}
-              <video ref={videoRef} style={{width:340,borderRadius:10,marginTop:14,display:cameraOn?'block':'none'}} muted playsInline></video>
+              <video ref={videoRef} style={{width:'100%',maxWidth:340,borderRadius:10,marginTop:14,display:cameraOn?'block':'none'}} muted playsInline></video>
               {enrollMsg && <div className="small" style={{marginTop:10,fontWeight:800}}>{enrollMsg}</div>}
               <div className="small muted" style={{marginTop:14}}>{enrolledStudents.length} من {students.length} طالب مسجل وجههم حتى الآن</div>
             </div>
@@ -5381,10 +5498,12 @@ function FaceAttendanceTab({groups,students,persistStudents,attendance,persistAt
                 )}
               </div>
               {!matcher && <div className="card"><Empty icon="◎" text="لازم تسجّل وجوه الطلاب الأول من تبويب (تسجيل وجوه الطلاب)" /></div>}
-              <div className="card" style={{position:'relative',width:'fit-content'}}>
-                <video ref={videoRef} style={{width:480,borderRadius:10,display:cameraOn?'block':'none'}} muted playsInline></video>
-                <canvas ref={canvasRef} style={{position:'absolute',top:18,left:18,display:cameraOn?'block':'none'}}></canvas>
-                {!cameraOn && <Empty icon="📷" text="شغّل الكاميرا لبدء المسح" />}
+              <div className="card">
+                <div style={{position:'relative',width:'100%',maxWidth:480}}>
+                  <video ref={videoRef} style={{width:'100%',borderRadius:10,display:cameraOn?'block':'none'}} muted playsInline></video>
+                  <canvas ref={canvasRef} style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',display:cameraOn?'block':'none'}}></canvas>
+                  {!cameraOn && <Empty icon="📷" text="شغّل الكاميرا لبدء المسح" />}
+                </div>
               </div>
               {feedback && (
                 <div className="card" style={{marginTop:16, borderColor: feedback.type==='green'?'var(--green)':'var(--amber)'}}>
