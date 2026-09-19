@@ -2741,8 +2741,8 @@ function GradesTab({groups,students,grades,persistGrades,studentsInGroup,isAdmin
   return (
     <div>
       <div className="topbar">
-        <div><h1>الدرجات</h1><div className="date">سجّل درجات الاختبارات والواجبات لكل مجموعة{!isAdmin && ' — عرض فقط'}</div></div>
-        {isAdmin && <button className="btn btn-primary" onClick={openNew} disabled={!groupId}>+ اختبار جديد</button>}
+        <div><h1>الدرجات</h1><div className="date">سجّل درجات الاختبارات والواجبات لكل مجموعة</div></div>
+        <button className="btn btn-primary" onClick={openNew} disabled={!groupId}>+ اختبار جديد</button>
       </div>
 
       <div className="toolbar">
@@ -2758,12 +2758,10 @@ function GradesTab({groups,students,grades,persistGrades,studentsInGroup,isAdmin
             <div className="card" key={exam.id}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
                 <div><b>{exam.name}</b> <span className="muted small">— {exam.date} — من {exam.maxScore}</span></div>
-                {isAdmin && (
-                  <div style={{display:'flex',gap:6}}>
-                    <button className="btn btn-ghost btn-sm" onClick={()=>setCreating(exam)}>تعديل الدرجات</button>
-                    <button className="btn btn-danger btn-sm" onClick={()=>remove(exam.id)}>حذف</button>
-                  </div>
-                )}
+                <div style={{display:'flex',gap:6}}>
+                  <button className="btn btn-ghost btn-sm" onClick={()=>setCreating(exam)}>تعديل الدرجات</button>
+                  {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(exam.id)}>حذف</button>}
+                </div>
               </div>
               <table>
                 <thead><tr><th>الطالب</th><th>الدرجة الكلية</th><th>درجة الطالب</th><th>النسبة المئوية</th></tr></thead>
