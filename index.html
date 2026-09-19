@@ -431,6 +431,15 @@ function buildWhatsAppReportLink(student, month, stats, teacher){
   if(stats.homeworkTrackedCount>0) lines.push(`📓 الواجب: حل ${stats.homeworkDoneCount} من ${stats.homeworkTrackedCount} حصة`);
   lines.push(`💳 حالة السداد: ${stats.paid?'تم السداد ✅':'متأخر ⚠️'}`);
 
+  if(stats.monthExams && stats.monthExams.length>0){
+    lines.push(``, `📝 تفاصيل الاختبارات:`);
+    stats.monthExams.forEach(e=>{
+      const sc = e.scores?.[student.id];
+      const pct = (sc!=null && e.maxScore) ? Math.round((sc/e.maxScore)*100) : null;
+      lines.push(`• ${e.name} (${e.date}): ${sc ?? '—'} من ${e.maxScore}${pct!=null?` — ${pct}%`:''}`);
+    });
+  }
+
   if(stats.sessions && stats.sessions.length>0){
     lines.push(``, `📋 تفاصيل الحصص:`);
     stats.sessions.forEach(s=>{
@@ -908,7 +917,14 @@ function QuickGradePanel({students,groups,grades,persistGrades,onDone}){
                   {studentExams.map(e=><option key={e.id} value={e.id}>{e.name} — {e.date} (من {e.maxScore})</option>)}
                 </select>
               </Field>
-              {exam && <Field label={`الدرجة (من ${exam.maxScore})`}><input type="number" value={score} onChange={e=>setScore(e.target.value)} /></Field>}
+              {exam && (
+                <Field label={`الدرجة (من ${exam.maxScore})`}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <input type="number" value={score} onChange={e=>setScore(e.target.value)} />
+                    {(()=>{ const pct = score!==''&&exam.maxScore ? Math.round((Number(score)/exam.maxScore)*100) : null; return <span className={"badge "+(pct===null?'badge-gray':pct>=75?'badge-green':pct>=50?'badge-amber':'badge-rose')} style={{minWidth:48,textAlign:'center'}}>{pct===null?'—':pct+'%'}</span>; })()}
+                  </div>
+                </Field>
+              )}
             </React.Fragment>
           )}
         </div>
@@ -2750,12 +2766,19 @@ function GradesTab({groups,students,grades,persistGrades,studentsInGroup,isAdmin
                 )}
               </div>
               <table>
-                <thead><tr><th>الطالب</th><th>الدرجة</th></tr></thead>
+                <thead><tr><th>الطالب</th><th>الدرجة الكلية</th><th>درجة الطالب</th><th>النسبة المئوية</th></tr></thead>
                 <tbody>
                   {roster.map(s=>{
                     const sc = exam.scores?.[s.id];
                     const pct = sc!=null && exam.maxScore ? Math.round((sc/exam.maxScore)*100) : null;
-                    return <tr key={s.id}><td>{s.name}</td><td>{sc!=null?<span className={"badge "+(pct>=75?'badge-green':pct>=50?'badge-amber':'badge-rose')}>{sc} / {exam.maxScore}</span>:<span className="muted">لم تُدخل</span>}</td></tr>;
+                    return (
+                      <tr key={s.id}>
+                        <td>{s.name}</td>
+                        <td className="small muted">{exam.maxScore}</td>
+                        <td>{sc!=null?sc:<span className="muted">لم تُدخل</span>}</td>
+                        <td>{pct!=null?<span className={"badge "+(pct>=75?'badge-green':pct>=50?'badge-amber':'badge-rose')}>{pct}%</span>:<span className="muted">—</span>}</td>
+                      </tr>
+                    );
                   })}
                 </tbody>
               </table>
@@ -2784,13 +2807,18 @@ function ExamForm({exam,roster,onCancel,onSave}){
       </div>
       <Field label="الدرجة النهائية"><input type="number" value={f.maxScore} onChange={e=>setF({...f,maxScore:Number(e.target.value)})} /></Field>
       <label>درجات الطلاب</label>
-      <div style={{maxHeight:260,overflowY:'auto',border:'1px solid var(--border)',borderRadius:10,padding:10,marginTop:6}}>
-        {roster.length===0 ? <div className="muted small">لا يوجد طلاب في هذه المجموعة</div> : roster.map(s=>(
+      <div style={{maxHeight:300,overflowY:'auto',border:'1px solid var(--border)',borderRadius:10,padding:10,marginTop:6}}>
+        {roster.length===0 ? <div className="muted small">لا يوجد طلاب في هذه المجموعة</div> : roster.map(s=>{
+          const sc = f.scores?.[s.id];
+          const pct = (sc!=null && f.maxScore) ? Math.round((sc/f.maxScore)*100) : null;
+          return (
           <div key={s.id} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
             <div style={{flex:1,fontSize:13}}>{s.name}</div>
-            <input type="number" style={{width:80}} value={f.scores?.[s.id] ?? ''} onChange={e=>setScore(s.id,e.target.value)} />
+            <input type="number" style={{width:80}} value={sc ?? ''} onChange={e=>setScore(s.id,e.target.value)} placeholder={`من ${f.maxScore||''}`} />
+            <span className={"badge "+(pct===null?'badge-gray':pct>=75?'badge-green':pct>=50?'badge-amber':'badge-rose')} style={{minWidth:48,textAlign:'center'}}>{pct===null?'—':pct+'%'}</span>
           </div>
-        ))}
+          );
+        })}
       </div>
       <div className="modal-actions">
         <button className="btn btn-primary" onClick={()=>{ if(!f.name.trim()){alert('أدخل اسم الاختبار');return;} onSave(f); }}>حفظ</button>
@@ -5730,11 +5758,21 @@ function ReportsTab({students,groups,teachers,attendance,grades,payments,groupBy
           <div className="section-title">درجات الاختبارات</div>
           {stats.monthExams.length===0 ? <div className="muted small">لا توجد اختبارات مسجلة هذا الشهر</div> : (
             <table style={{marginBottom:8}}>
-              <thead><tr><th>الاختبار</th><th>التاريخ</th><th>الدرجة</th></tr></thead>
+              <thead><tr><th>الاختبار</th><th>التاريخ</th><th>الدرجة الكلية</th><th>درجة الطالب</th><th>النسبة المئوية</th></tr></thead>
               <tbody>
-                {stats.monthExams.map(e=>(
-                  <tr key={e.id}><td>{e.name}</td><td>{e.date}</td><td>{e.scores?.[studentId] ?? '—'} / {e.maxScore}</td></tr>
-                ))}
+                {stats.monthExams.map(e=>{
+                  const sc = e.scores?.[studentId];
+                  const pct = (sc!=null && e.maxScore) ? Math.round((sc/e.maxScore)*100) : null;
+                  return (
+                    <tr key={e.id}>
+                      <td>{e.name}</td>
+                      <td>{e.date}</td>
+                      <td>{e.maxScore}</td>
+                      <td>{sc ?? '—'}</td>
+                      <td>{pct!=null?<span className={"badge "+(pct>=75?'badge-green':pct>=50?'badge-amber':'badge-rose')}>{pct}%</span>:'—'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
