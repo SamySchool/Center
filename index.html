@@ -812,6 +812,7 @@ function studentSearchMatches(students, q){
 function QuickPaymentPanel({students,payments,persistPayments,groupById,setReceiptData,isAdmin,onDone}){
   const [query,setQuery] = useState('');
   const [selected,setSelected] = useState(null);
+  const [amount,setAmount] = useState('');
   const month = monthKey();
   const matches = studentSearchMatches(students, query);
   const g = selected ? groupById(selected.groupId) : null;
@@ -819,24 +820,34 @@ function QuickPaymentPanel({students,payments,persistPayments,groupById,setRecei
   const record = selected ? payments.find(p=>p.studentId===selected.id && p.month===month) : null;
   const norm = selected ? normalizePaymentRecord(record, due) : null;
   const remaining = norm ? Math.max(0, norm.amountDue-norm.amountPaid) : 0;
+  const half = Math.round(due/2);
+
+  const select = (s) => { setSelected(s); setAmount(''); };
 
   const registerPayment = () => {
+    const amountToAdd = Number(amount);
+    if(!amountToAdd || amountToAdd<=0){ alert('أدخل مبلغ صحيح'); return; }
     const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
     const nextReceiptNo = payments.filter(p=>p.receiptNo).length + 1;
     const receiptNo = (record && record.receiptNo) || nextReceiptNo;
-    const newPaid = norm.amountPaid + remaining; // quick-pay always settles the full remaining balance
+    const newPaid = norm.amountPaid + amountToAdd;
+    const nowFullyPaid = due<=0 ? true : newPaid>=due;
+    const nowISO = new Date().toISOString();
     const payload = {
       id: record?record.id:uid(), studentId:selected.id, month,
-      amountDue: due, amountPaid: newPaid, amount: newPaid, paid: true,
-      paidDate:todayISO(), paidAt:new Date().toISOString(), paidBy:recipientLabel, receiptNo,
+      amountDue: due, amountPaid: newPaid, amount: newPaid, paid: nowFullyPaid,
+      paidDate:todayISO(), paidAt:nowISO, paidBy:recipientLabel, receiptNo,
+      // same per-installment history as the main payments flow — keeps this quick-pay path
+      // visible in the daily cash tab / jard / month totals for partial payments too.
+      history: [...(record?.history||[]), {date:todayISO(), amount:amountToAdd, at:nowISO, by:recipientLabel}],
     };
     if(record) persistPayments(payments.map(p=>p.id===record.id?payload:p));
     else persistPayments([...payments, payload]);
-    queueAutoNotification('payment', selected, {amount:remaining, month, receiptNo, remaining:0, fullyPaid:true});
+    queueAutoNotification('payment', selected, {amount:amountToAdd, month, receiptNo, remaining: Math.max(0,due-newPaid), fullyPaid: nowFullyPaid});
     const paidDateObj = new Date();
     setReceiptData({
-      receiptNo, studentName: selected.name, groupName: g?g.name:'—', month, amount: remaining, date: todayISO(),
-      forWhat: `اشتراك شهر ${monthLabel(month)} كامل`,
+      receiptNo, studentName: selected.name, groupName: g?g.name:'—', month, amount: amountToAdd, date: todayISO(),
+      forWhat: `اشتراك شهر ${monthLabel(month)}${nowFullyPaid?' كامل':' (دفعة جزئية)'}`,
       dayName: SCHED_DAY_NAMES[paidDateObj.getDay()],
       time: paidDateObj.toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit',hour12:true}),
       recipient: recipientLabel,
@@ -852,7 +863,7 @@ function QuickPaymentPanel({students,payments,persistPayments,groupById,setRecei
       {!selected && matches.length>0 && (
         <div style={{border:'1px solid var(--border)',borderRadius:10,overflow:'hidden',marginBottom:14}}>
           {matches.map(s=>(
-            <div key={s.id} onClick={()=>setSelected(s)} style={{padding:'10px 12px',cursor:'pointer',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between'}}>
+            <div key={s.id} onClick={()=>select(s)} style={{padding:'10px 12px',cursor:'pointer',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between'}}>
               <span>{s.name}</span><span className="small muted">{studentCode(s.id)}</span>
             </div>
           ))}
@@ -868,8 +879,18 @@ function QuickPaymentPanel({students,payments,persistPayments,groupById,setRecei
           <div style={{marginTop:6}}>{remaining<=0?<span className="badge badge-green">تم السداد بالفعل</span>:norm.amountPaid>0?<span className="badge badge-amber">دفعة جزئية مسجلة</span>:<span className="badge badge-rose">لسه متأخر</span>}</div>
         </div>
       )}
+      {selected && remaining>0 && (
+        <React.Fragment>
+          <Field label="المبلغ المدفوع الآن (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder={String(remaining)} /></Field>
+          <div className="chip-row" style={{marginBottom:14}}>
+            <span className="chip" onClick={()=>setAmount(String(remaining))}>المبلغ كامل ({fmtMoney(remaining)})</span>
+            <span className="chip" onClick={()=>setAmount(String(half))}>نصف الشهر ({fmtMoney(half)}) — لمنضم متأخر</span>
+          </div>
+          <div className="small muted" style={{marginBottom:14}}>لو المبلغ أقل من المتبقي، هيتسجل كدفعة جزئية والباقي يفضل ظاهر كمتأخر.</div>
+        </React.Fragment>
+      )}
       <div className="modal-actions">
-        {selected && remaining>0 && <button className="btn btn-primary" onClick={registerPayment}>تسجيل سداد {fmtMoney(remaining)} وطباعة إيصال</button>}
+        {selected && remaining>0 && <button className="btn btn-primary" onClick={registerPayment}>تسجيل السداد وطباعة إيصال</button>}
         <button className="btn btn-ghost" onClick={onDone}>إغلاق</button>
       </div>
     </div>
@@ -3743,7 +3764,11 @@ function getGoogleAccessToken(){
     if(!gcalTokenClient){
       gcalTokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
-        scope: 'https://www.googleapis.com/auth/calendar.events',
+        // Creating/looking-up a calendar (Calendars: insert/get) needs the full "calendar" scope —
+        // the narrower "calendar.events" scope only covers reading/writing events on calendars that
+        // already exist, so with only that scope ensureSamySchoolCalendar() would fail on every sync
+        // that needs to create the "جدول Samy School" calendar (or verify it still exists) with a 403.
+        scope: 'https://www.googleapis.com/auth/calendar',
         callback: () => {},
       });
     }
