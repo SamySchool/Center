@@ -813,16 +813,22 @@ function QuickPaymentPanel({students,payments,persistPayments,groupById,setRecei
   const [query,setQuery] = useState('');
   const [selected,setSelected] = useState(null);
   const [amount,setAmount] = useState('');
+  const [dueOverride,setDueOverride] = useState('');
   const month = monthKey();
   const matches = studentSearchMatches(students, query);
   const g = selected ? groupById(selected.groupId) : null;
   const due = selected ? studentFee(selected, g) : 0;
   const record = selected ? payments.find(p=>p.studentId===selected.id && p.month===month) : null;
   const norm = selected ? normalizePaymentRecord(record, due) : null;
-  const remaining = norm ? Math.max(0, norm.amountDue-norm.amountPaid) : 0;
+  // effectiveDue: normally the student's regular fee (norm.amountDue, which already respects
+  // any override saved on a previous payment this month), but editable via dueOverride so a
+  // late joiner who only owes half the normal fee can have that lower amount saved as this
+  // month's real "amountDue" instead of it just being a partial installment toward the full fee.
+  const effectiveDue = dueOverride!=='' ? (Number(dueOverride)||0) : (norm?norm.amountDue:0);
+  const remaining = norm ? Math.max(0, effectiveDue-norm.amountPaid) : 0;
   const half = Math.round(due/2);
 
-  const select = (s) => { setSelected(s); setAmount(''); };
+  const select = (s) => { setSelected(s); setAmount(''); setDueOverride(''); };
 
   const registerPayment = () => {
     const amountToAdd = Number(amount);
@@ -831,11 +837,11 @@ function QuickPaymentPanel({students,payments,persistPayments,groupById,setRecei
     const nextReceiptNo = payments.filter(p=>p.receiptNo).length + 1;
     const receiptNo = (record && record.receiptNo) || nextReceiptNo;
     const newPaid = norm.amountPaid + amountToAdd;
-    const nowFullyPaid = due<=0 ? true : newPaid>=due;
+    const nowFullyPaid = effectiveDue<=0 ? true : newPaid>=effectiveDue;
     const nowISO = new Date().toISOString();
     const payload = {
       id: record?record.id:uid(), studentId:selected.id, month,
-      amountDue: due, amountPaid: newPaid, amount: newPaid, paid: nowFullyPaid,
+      amountDue: effectiveDue, amountPaid: newPaid, amount: newPaid, paid: nowFullyPaid,
       paidDate:todayISO(), paidAt:nowISO, paidBy:recipientLabel, receiptNo,
       // same per-installment history as the main payments flow — keeps this quick-pay path
       // visible in the daily cash tab / jard / month totals for partial payments too.
@@ -843,7 +849,7 @@ function QuickPaymentPanel({students,payments,persistPayments,groupById,setRecei
     };
     if(record) persistPayments(payments.map(p=>p.id===record.id?payload:p));
     else persistPayments([...payments, payload]);
-    queueAutoNotification('payment', selected, {amount:amountToAdd, month, receiptNo, remaining: Math.max(0,due-newPaid), fullyPaid: nowFullyPaid});
+    queueAutoNotification('payment', selected, {amount:amountToAdd, month, receiptNo, remaining: Math.max(0,effectiveDue-newPaid), fullyPaid: nowFullyPaid});
     const paidDateObj = new Date();
     setReceiptData({
       receiptNo, studentName: selected.name, groupName: g?g.name:'—', month, amount: amountToAdd, date: todayISO(),
@@ -881,12 +887,15 @@ function QuickPaymentPanel({students,payments,persistPayments,groupById,setRecei
       )}
       {selected && remaining>0 && (
         <React.Fragment>
+          <Field label="المطلوب لهذا الشهر (قلّله لو الطالب منضم متأخر وهيدفع نص الشهر بس كامل حقه)">
+            <input type="number" value={dueOverride} onChange={e=>setDueOverride(e.target.value)} placeholder={String(effectiveDue)} />
+          </Field>
           <Field label="المبلغ المدفوع الآن (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder={String(remaining)} /></Field>
           <div className="chip-row" style={{marginBottom:14}}>
-            <span className="chip" onClick={()=>setAmount(String(remaining))}>المبلغ كامل ({fmtMoney(remaining)})</span>
-            <span className="chip" onClick={()=>setAmount(String(half))}>نصف الشهر ({fmtMoney(half)}) — لمنضم متأخر</span>
+            <span className="chip" onClick={()=>{ setDueOverride(String(due)); setAmount(String(Math.max(0,due-norm.amountPaid))); }}>الاشتراك كامل ({fmtMoney(due)})</span>
+            <span className="chip" onClick={()=>{ setDueOverride(String(half)); setAmount(String(Math.max(0,half-norm.amountPaid))); }}>نصف الشهر ({fmtMoney(half)}) — لمنضم متأخر، ويتحسب سداد كامل</span>
           </div>
-          <div className="small muted" style={{marginBottom:14}}>لو المبلغ أقل من المتبقي، هيتسجل كدفعة جزئية والباقي يفضل ظاهر كمتأخر.</div>
+          <div className="small muted" style={{marginBottom:14}}>لو المبلغ المدفوع أقل من "المطلوب لهذا الشهر"، هيتسجل كدفعة جزئية والباقي يفضل ظاهر كمتأخر.</div>
         </React.Fragment>
       )}
       <div className="modal-actions">
@@ -3049,19 +3058,24 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
 
   // Adds `amountToAdd` to whatever's already been paid this month — supports paying in
   // parts (e.g. half now, rest later) instead of only a single all-or-nothing payment.
-  const recordPayment = (student, amountToAdd) => {
+  // `dueOverride`, when given, replaces the amount owed for THIS month's record only (e.g. a
+  // late joiner who only owes half the normal fee for their first partial month) — the
+  // student's normal fee for future months is untouched since this is saved on the payment
+  // record itself (normalizePaymentRecord already prefers a saved amountDue over the live fee).
+  const recordPayment = (student, amountToAdd, dueOverride) => {
     const g = groupById(student.groupId);
     const due = studentFee(student,g);
     const existing = recordFor(student.id);
     const norm = normalizePaymentRecord(existing, due);
+    const effectiveDue = (dueOverride!=null && dueOverride!=='') ? Number(dueOverride)||0 : norm.amountDue;
     const newPaid = norm.amountPaid + amountToAdd;
     const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
     const receiptNo = (existing && existing.receiptNo) || nextReceiptNo();
-    const nowFullyPaid = due<=0 ? true : newPaid>=due;
+    const nowFullyPaid = effectiveDue<=0 ? true : newPaid>=effectiveDue;
     const nowISO = new Date().toISOString();
     const payload = {
       id: existing?existing.id:uid(), studentId:student.id, month,
-      amountDue: due, amountPaid: newPaid, amount: newPaid,
+      amountDue: effectiveDue, amountPaid: newPaid, amount: newPaid,
       paid: nowFullyPaid,
       paidDate: todayISO(), paidAt: nowISO, paidBy: recipientLabel,
       receiptNo,
@@ -3269,16 +3283,19 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
         )}
       </div>
 
-      {payingFor && (
-        <Modal title={`تسجيل سداد — ${payingFor.name}`} onClose={()=>setPayingFor(null)}>
-          <PartialPaymentForm
-            student={payingFor} due={studentFee(payingFor, groupById(payingFor.groupId))}
-            paidSoFar={normalizePaymentRecord(recordFor(payingFor.id), studentFee(payingFor, groupById(payingFor.groupId))).amountPaid}
-            onCancel={()=>setPayingFor(null)}
-            onSave={(amt)=>recordPayment(payingFor, amt)}
-          />
-        </Modal>
-      )}
+      {payingFor && (()=>{
+        const due = studentFee(payingFor, groupById(payingFor.groupId));
+        const norm = normalizePaymentRecord(recordFor(payingFor.id), due);
+        return (
+          <Modal title={`تسجيل سداد — ${payingFor.name}`} onClose={()=>setPayingFor(null)}>
+            <PartialPaymentForm
+              student={payingFor} due={due} amountDue={norm.amountDue} paidSoFar={norm.amountPaid}
+              onCancel={()=>setPayingFor(null)}
+              onSave={(amt,dueOverride)=>recordPayment(payingFor, amt, dueOverride)}
+            />
+          </Modal>
+        );
+      })()}
       {notebookPayFor && (
         <Modal title={`تسجيل دفع المذكرة — ${notebookPayFor.name}`} onClose={()=>setNotebookPayFor(null)}>
           <NotebookPaymentForm
@@ -3307,25 +3324,34 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
   );
 }
 
-function PartialPaymentForm({student,due,paidSoFar,onCancel,onSave}){
-  const remaining = Math.max(0, due-paidSoFar);
-  const [amount,setAmount] = useState(String(remaining||due));
+function PartialPaymentForm({student,due,amountDue,paidSoFar,onCancel,onSave}){
+  // `dueOverride` is what's actually owed for THIS month's record — normally equal to the
+  // student's regular fee (`due`), but editable here so a late joiner who only owes half
+  // the normal fee for their first partial month can have that lower amount saved as the
+  // month's real "amountDue" instead of just a partial installment toward the full fee.
+  const [dueOverride,setDueOverride] = useState(String(amountDue));
+  const effectiveDue = Number(dueOverride)||0;
+  const remaining = Math.max(0, effectiveDue-paidSoFar);
+  const [amount,setAmount] = useState(String(remaining||effectiveDue));
   const half = Math.round(due/2);
   return (
     <div>
       <div className="grid grid-3" style={{marginBottom:14}}>
-        <div><div className="small muted">المطلوب</div><div style={{fontWeight:800}}>{fmtMoney(due)}</div></div>
+        <div><div className="small muted">المطلوب</div><div style={{fontWeight:800}}>{fmtMoney(effectiveDue)}</div></div>
         <div><div className="small muted">المدفوع</div><div style={{fontWeight:800,color:'var(--green)'}}>{fmtMoney(paidSoFar)}</div></div>
         <div><div className="small muted">المتبقي</div><div style={{fontWeight:800,color:'var(--rose)'}}>{fmtMoney(remaining)}</div></div>
       </div>
+      <Field label="المطلوب لهذا الشهر (قلّله لو الطالب منضم متأخر وهيدفع نص الشهر بس كامل حقه)">
+        <input type="number" value={dueOverride} onChange={e=>setDueOverride(e.target.value)} placeholder={String(due)} />
+      </Field>
       <Field label="المبلغ المدفوع الآن (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder={String(remaining)} /></Field>
       <div className="chip-row" style={{marginBottom:14}}>
-        <span className="chip" onClick={()=>setAmount(String(remaining||due))}>المبلغ كامل ({fmtMoney(remaining||due)})</span>
-        <span className="chip" onClick={()=>setAmount(String(half))}>نصف الشهر ({fmtMoney(half)}) — لمنضم متأخر</span>
+        <span className="chip" onClick={()=>{ setDueOverride(String(due)); setAmount(String(Math.max(0,due-paidSoFar))); }}>الاشتراك كامل ({fmtMoney(due)})</span>
+        <span className="chip" onClick={()=>{ setDueOverride(String(half)); setAmount(String(Math.max(0,half-paidSoFar))); }}>نصف الشهر ({fmtMoney(half)}) — لمنضم متأخر، ويتحسب سداد كامل</span>
       </div>
-      <div className="small muted" style={{marginBottom:14}}>لو المبلغ أقل من المتبقي، هيتسجل كدفعة جزئية والباقي يفضل ظاهر كمتأخر.</div>
+      <div className="small muted" style={{marginBottom:14}}>لو المبلغ المدفوع أقل من "المطلوب لهذا الشهر"، هيتسجل كدفعة جزئية والباقي يفضل ظاهر كمتأخر. شيب "نصف الشهر" بيقلل المطلوب نفسه (للمنضم متأخر) — مش مجرد دفعة جزئية من الاشتراك الكامل.</div>
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={()=>{ const n=Number(amount); if(!n||n<=0){alert('أدخل مبلغ صحيح');return;} onSave(n); }}>تسجيل السداد</button>
+        <button className="btn btn-primary" onClick={()=>{ const n=Number(amount); const d=Number(dueOverride); if(!n||n<=0){alert('أدخل مبلغ صحيح');return;} if(dueOverride!==''&&d<0){alert('أدخل قيمة صحيحة للمطلوب');return;} onSave(n, dueOverride); }}>تسجيل السداد</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
       </div>
     </div>
