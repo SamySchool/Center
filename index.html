@@ -740,9 +740,9 @@ function Empty({icon,text}){
 
 // Floating quick-action button — lets the secretary/admin jump straight to the 4 most common
 // daily actions from anywhere in the app, without navigating tabs first.
-function QuickActionsBar({students,groups,payments,persistPayments,grades,persistGrades,attendance,persistAttendance,persistStudents,groupById,studentsInGroup,setReceiptData,isAdmin,actorRef}){
+function QuickActionsBar({students,groups,teachers,persistGroups,payments,persistPayments,grades,persistGrades,attendance,persistAttendance,persistStudents,groupById,studentsInGroup,setReceiptData,isAdmin,actorRef}){
   const [open,setOpen] = useState(false);
-  const [active,setActive] = useState(null); // 'payment' | 'student' | 'grade' | 'attendance' | null
+  const [active,setActive] = useState(null); // 'payment' | 'student' | 'grade' | 'attendance' | 'prep' | null
 
   const close = () => { setActive(null); setOpen(false); };
 
@@ -760,6 +760,7 @@ function QuickActionsBar({students,groups,payments,persistPayments,grades,persis
               <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('student');setOpen(false);}}>👤 إضافة طالب جديد</button>
               <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('grade');setOpen(false);}}>✎ إضافة درجات</button>
               <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('attendance');setOpen(false);}}>✓ حضور وغياب</button>
+              {isAdmin && <button className="btn btn-primary btn-sm" style={{boxShadow:'0 6px 16px rgba(0,0,0,.25)'}} onClick={()=>{setActive('prep');setOpen(false);}}>📝 تجهيز الحصة الجايه</button>}
             </div>
           )}
           <button onClick={()=>setOpen(o=>!o)} style={{
@@ -795,7 +796,73 @@ function QuickActionsBar({students,groups,payments,persistPayments,grades,persis
           <QuickAttendancePanel students={students} groupById={groupById} attendance={attendance} persistAttendance={persistAttendance} onDone={close} />
         </Modal>
       )}
+      {active==='prep' && isAdmin && (
+        <Modal title="تجهيز الحصة الجايه — واجب وتسميع/امتحان" onClose={close}>
+          <NextSessionPrepPanel groups={groups} teachers={teachers} persistGroups={persistGroups} onDone={close} />
+        </Modal>
+      )}
     </React.Fragment>
+  );
+}
+
+// Lets Mr. Mohamed Samy (the owner) record, right after finishing today's session with a
+// group, what's required for that SAME group's next session (homework pages + recitation or
+// exam). Saved directly on the group's own doc (groups is already admin-write-only in
+// Firestore rules, so no rules change needed) as the group's current "pending requirement" —
+// it just stays there, shown every morning that group meets, until overwritten after the next
+// session. No date-matching bookkeeping needed since a group only meets on its own fixed days.
+function NextSessionPrepPanel({groups,teachers,persistGroups,onDone}){
+  const owner = teachers.find(t=>t.isOwner);
+  const todayWeekday = new Date().getDay();
+  const todaysGroups = owner ? groups.filter(g=>g.teacherId===owner.id && g.days && g.days.includes(todayWeekday)) : [];
+  const [groupId,setGroupId] = useState(todaysGroups[0]?todaysGroups[0].id:'');
+  const group = groups.find(g=>g.id===groupId);
+  const [homework,setHomework] = useState(group?.nextHomework||'');
+  const [recType,setRecType] = useState(group?.nextRecitationType||'recitation');
+  const [recText,setRecText] = useState(group?.nextRecitationText||'');
+
+  const selectGroup = (id) => {
+    setGroupId(id);
+    const g = groups.find(x=>x.id===id);
+    setHomework(g?.nextHomework||'');
+    setRecType(g?.nextRecitationType||'recitation');
+    setRecText(g?.nextRecitationText||'');
+  };
+
+  const save = () => {
+    if(!group){ alert('اختر مجموعة'); return; }
+    persistGroups(groups.map(g=>g.id===group.id?{
+      ...g, nextHomework:homework, nextRecitationType:recType, nextRecitationText:recText,
+      nextPrepUpdatedAt:new Date().toISOString(), nextPrepUpdatedBy:'مستر محمد سامي',
+    }:g));
+    onDone();
+  };
+
+  if(!owner) return <div className="muted small">معرفش أحدد مدرس صاحب الأكاديمية — تأكد من بيانات المدرسين.</div>;
+  if(todaysGroups.length===0) return <div className="muted small">مفيش مجموعات ليك النهاردة ({SCHED_DAY_NAMES[todayWeekday]}) — المفروض تدخل المطلوب بعد حصة النهاردة لمجموعة من مجموعاتك اللي عندها حصة النهاردة.</div>;
+
+  return (
+    <div>
+      <Field label="المجموعة (من مجموعاتك اللي عندها حصة النهاردة)">
+        <select value={groupId} onChange={e=>selectGroup(e.target.value)}>
+          {todaysGroups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+      </Field>
+      <Field label="صفحات الواجب"><input value={homework} onChange={e=>setHomework(e.target.value)} placeholder="مثال: صفحة 80" /></Field>
+      <Field label="تسميع ولا امتحان؟">
+        <div className="chip-row">
+          <span className={"chip "+(recType==='recitation'?'active':'')} onClick={()=>setRecType('recitation')}>تسميع</span>
+          <span className={"chip "+(recType==='exam'?'active':'')} onClick={()=>setRecType('exam')}>امتحان</span>
+        </div>
+      </Field>
+      <Field label={recType==='exam'?'محتوى الامتحان':'صفحات/دروس التسميع'}>
+        <input value={recText} onChange={e=>setRecText(e.target.value)} placeholder="مثال: Lesson 1,2" />
+      </Field>
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={save}>حفظ — هيظهر كتذكير يوم الحصة الجايه</button>
+        <button className="btn btn-ghost" onClick={onDone}>إلغاء</button>
+      </div>
+    </div>
   );
 }
 
@@ -1464,7 +1531,7 @@ function App(){
         <span style={{width:36}}></span>
       </div>
       <GlobalHeader isAdmin={isAdmin} students={students} />
-      <QuickActionsBar {...{students,groups,payments,persistPayments,grades,persistGrades,attendance,persistAttendance,persistStudents,groupById,studentsInGroup,setReceiptData,isAdmin,actorRef}} />
+      <QuickActionsBar {...{students,groups,teachers,persistGroups,payments,persistPayments,grades,persistGrades,attendance,persistAttendance,persistStudents,groupById,studentsInGroup,setReceiptData,isAdmin,actorRef}} />
       <div className="app">
       <div className={"nav-overlay"+(mobileNavOpen?' show':'')} onClick={()=>setMobileNavOpen(false)}></div>
       <div className={"sidebar no-print"+(mobileNavOpen?' open':'')}>
@@ -1734,15 +1801,31 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
       .sort((a,b)=>b.streak-a.streak);
   },[students,attendance]);
 
+  const todayWeekday = new Date().getDay();
+  const owner = teachers.find(t=>t.isOwner);
+
   // Overdue students whose group actually meets today — so the secretary knows exactly who
   // to remind (via the payment reminder icon) before they even walk in this afternoon.
   const overdueToday = useMemo(()=>{
-    const todayWeekday = new Date().getDay();
     return overdueStudents.filter(s=>{
       const g = groupById(s.groupId);
       return g && g.days && g.days.length>0 && g.days.includes(todayWeekday);
     });
-  },[overdueStudents,groupById]);
+  },[overdueStudents,groupById,todayWeekday]);
+
+  // Every group (any teacher) with a session today — the "accounts" side of the morning brief.
+  const todaysGroups = useMemo(()=> groups.filter(g=>g.days && g.days.includes(todayWeekday)), [groups,todayWeekday]);
+
+  // Mr. Mohamed Samy's own groups meeting today, with whatever homework/recitation/exam he
+  // recorded for their next session (via the "📝 تجهيز الحصة الجايه" quick action) — the
+  // "content prep" side, so the secretary can check homework and get recitation papers ready
+  // before students walk in.
+  const ownerTodaysGroups = useMemo(()=> owner ? todaysGroups.filter(g=>g.teacherId===owner.id) : [], [todaysGroups,owner]);
+
+  const lastUpdatedLabel = (iso) => {
+    if(!iso) return null;
+    try{ return new Date(iso).toLocaleString('ar-EG',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}); }catch(e){ return null; }
+  };
 
   return (
     <div>
@@ -1755,19 +1838,64 @@ function Dashboard({students,groups,teachers,attendance,payments,overdueStudents
 
       {isAdmin && <SecretaryActivityCard setTab={setTab} />}
 
-      {overdueToday.length>0 && (
-        <div className="card" style={{marginBottom:18, borderColor:'var(--rose)'}}>
-          <div className="section-title" style={{color:'var(--rose)'}}>💳 متأخرين في السداد وهيحضروا النهاردة ({overdueToday.length})</div>
-          <div className="small muted" style={{marginTop:-6,marginBottom:10}}>فكّر تبعتلهم تذكير الصبح قبل ما ييجوا الحصة — زرار 📤 موجود جنب كل طالب في تبويب الحسابات (المصروفات).</div>
-          <div className="tag-row">
-            {overdueToday.map(s=>{
-              const g = groupById(s.groupId);
-              return <span key={s.id} className="badge badge-rose">{s.name}{g?` — ${g.name}`:''}</span>;
-            })}
+      <div className="grid grid-2" style={{marginBottom:18,alignItems:'stretch'}}>
+        <div className="card" style={{borderColor:'var(--rose)'}}>
+          <div className="section-title" style={{color:'var(--rose)'}}>📋 حسابات اليوم — {SCHED_DAY_NAMES[todayWeekday]}</div>
+          {todaysGroups.length===0 ? (
+            <div className="muted small" style={{marginBottom:10}}>مفيش مجموعات ليها حصص النهاردة.</div>
+          ) : (
+            <div className="tag-row" style={{marginBottom:12}}>
+              {todaysGroups.map(g=>{
+                const t = teachers.find(x=>x.id===g.teacherId);
+                return <span key={g.id} className="badge badge-gray">{g.name}{t?` — ${t.name}`:''}{g.schedule?` (${g.schedule})`:''}</span>;
+              })}
+            </div>
+          )}
+          <div style={{borderTop:'1px solid var(--border)',paddingTop:10,marginTop:4}}>
+            <div className="small" style={{fontWeight:800,marginBottom:6}}>💳 متأخرين في السداد وهيحضروا النهاردة ({overdueToday.length})</div>
+            {overdueToday.length===0 ? <div className="muted small">مفيش — الحمد لله</div> : (
+              <React.Fragment>
+                <div className="tag-row">
+                  {overdueToday.map(s=>{
+                    const g = groupById(s.groupId);
+                    return <span key={s.id} className="badge badge-rose">{s.name}{g?` — ${g.name}`:''}</span>;
+                  })}
+                </div>
+                <div style={{marginTop:10}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('accounting')}>الذهاب للمصروفات →</button></div>
+              </React.Fragment>
+            )}
           </div>
-          <div style={{marginTop:12}}><button className="btn btn-primary btn-sm" onClick={()=>setTab('accounting')}>الذهاب للمصروفات →</button></div>
         </div>
-      )}
+
+        <div className="card" style={{borderColor:'var(--amber)'}}>
+          <div className="section-title" style={{color:'var(--amber)'}}>📝 تجهيز المحتوى — مجموعات مستر محمد سامي اليوم</div>
+          {!owner ? (
+            <div className="muted small">معرفش أحدد مدرس صاحب الأكاديمية.</div>
+          ) : ownerTodaysGroups.length===0 ? (
+            <div className="muted small">مفيش حصص لمستر محمد سامي النهاردة.</div>
+          ) : (
+            <div style={{display:'flex',flexDirection:'column',gap:10}}>
+              {ownerTodaysGroups.map(g=>{
+                const hasHomework = !!(g.nextHomework && g.nextHomework.trim());
+                const hasRec = !!(g.nextRecitationText && g.nextRecitationText.trim());
+                const updated = lastUpdatedLabel(g.nextPrepUpdatedAt);
+                return (
+                  <div key={g.id} style={{border:'1px solid var(--border)',borderRadius:10,padding:'10px 12px'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+                      <div style={{fontWeight:900}}>{g.name}</div>
+                      {g.schedule && <div className="small muted">{g.schedule}</div>}
+                    </div>
+                    <div className="small" style={{marginTop:6}}>📓 الواجب: {hasHomework ? g.nextHomework : <span style={{color:'var(--rose)'}}>لسه متسجلش ⚠️</span>}</div>
+                    <div className="small" style={{marginTop:3}}>{g.nextRecitationType==='exam'?'📝 امتحان':'🗣️ تسميع'}: {hasRec ? g.nextRecitationText : <span style={{color:'var(--rose)'}}>لسه متسجلش ⚠️</span>}</div>
+                    {updated && <div className="small muted" style={{marginTop:4}}>آخر تحديث: {updated}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {isAdmin && <div className="small muted" style={{marginTop:10}}>تقدر تحدّث المطلوب لأي مجموعة بعد الحصة من زرار "⚡" العائم → "📝 تجهيز الحصة الجايه".</div>}
+        </div>
+      </div>
 
       <div className="grid grid-4" style={{marginBottom:18}}>
         <div className="card">
@@ -4893,6 +5021,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   };
 
   let ownerBlock = null;
+  let ownerGrossRevenue = 0; // owner's revenue BEFORE subtracting his own tagged expenses — used for the academy-wide net below, so his expenses aren't subtracted twice
   if(owner){
     const {revenue:ownerGroupRevenue} = groupRevenue(owner);
     const ownerPrivateRevenue = privateLessons
@@ -4900,10 +5029,20 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
       .reduce((s,p)=>s+(Number(p.pricePerPackage)||0),0);
     const ownerExpenses = monthExpenses.filter(e=>e.owner===owner.id).reduce((s,e)=>s+(Number(e.amount)||0),0);
     const ownerNet = ownerGroupRevenue + ownerPrivateRevenue + totalRenterRevenue + monthNotebookRevenue - ownerExpenses;
+    ownerGrossRevenue = ownerGroupRevenue + ownerPrivateRevenue + totalRenterRevenue + monthNotebookRevenue;
     ownerBlock = {teacher:owner, ownerGroupRevenue, ownerPrivateRevenue, ownerRentRevenue: totalRenterRevenue, ownerNotebookRevenue: monthNotebookRevenue, ownerExpenses, ownerNet};
   }
 
-  const academyNetProfit = academyCutFromTeachers + (ownerBlock?ownerBlock.ownerNet:0) - totalSharedExpenses;
+  // Overall academy net = the academy's cut of every commission teacher's revenue, plus the
+  // owner's own full revenue (his group/private/rent/notebook income all belongs to the
+  // academy), minus EVERY expense in the system in one place — no exceptions. Previously this
+  // subtracted `ownerExpenses` (inside ownerNet) + `totalSharedExpenses` separately, so an
+  // expense tagged to a specific NON-owner commission teacher ("خصم من حسابه الشخصي") matched
+  // neither filter and never got subtracted here at all — it reduced the cash in the drawer
+  // (treasuryNet, which always summed unfiltered totalExpenses) but silently vanished from
+  // "صافي ربح الأكاديمية", inflating it. Fixed per Mohamed (Oct 2026): "كل المصروفات بلا
+  // استثناء تتخصم من الايرادات كلها".
+  const academyNetProfit = academyCutFromTeachers + ownerGrossRevenue - totalExpenses;
 
   const saveExpense = (data) => {
     if(data.id) persistExpenses(expenses.map(e=>e.id===data.id?data:e));
@@ -5132,7 +5271,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
                   </tr>
                 </tbody>
               </table>
-              <p className="small muted" style={{marginTop:10}}>صافي حسابه بيتجمع مع نصيب الأكاديمية من باقي المدرسين، وبعدين تتطرح منه المصروفات العامة المشتركة (الإيجار والفواتير) للوصول لصافي ربح الأكاديمية الكلي فوق.</p>
+              <p className="small muted" style={{marginTop:10}}>صافي ربح الأكاديمية فوق = إيرادات مستر محمد سامي كاملة (قبل خصم مصروفاته الخاصة) + نصيب الأكاديمية من باقي المدرسين، وبعدين تتطرح منه كل مصروفات الشهر كلها (المشتركة وأي مصروف خاص بأي مدرس) مرة واحدة.</p>
             </div>
           )}
         </div>
