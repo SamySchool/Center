@@ -805,17 +805,22 @@ function QuickActionsBar({students,groups,teachers,persistGroups,payments,persis
   );
 }
 
-// Lets Mr. Mohamed Samy (the owner) record, right after finishing today's session with a
-// group, what's required for that SAME group's next session (homework pages + recitation or
-// exam). Saved directly on the group's own doc (groups is already admin-write-only in
-// Firestore rules, so no rules change needed) as the group's current "pending requirement" —
-// it just stays there, shown every morning that group meets, until overwritten after the next
-// session. No date-matching bookkeeping needed since a group only meets on its own fixed days.
+// Lets Mr. Mohamed Samy (the owner) record, right after finishing a session with a group,
+// what's required for that SAME group's next session (homework pages + recitation or exam).
+// Saved directly on the group's own doc (groups is already admin-write-only in Firestore
+// rules, so no rules change needed) as the group's current "pending requirement" — it just
+// stays there, shown every morning that group meets, until overwritten after the next session.
+// The group picker defaults to groups meeting today, but always also lists the owner's other
+// groups (grouped separately) so entry isn't blocked just because today isn't one of a group's
+// fixed days — sessions are a couple of days apart, so there's still time to log it afterward.
 function NextSessionPrepPanel({groups,teachers,persistGroups,onDone}){
   const owner = teachers.find(t=>t.isOwner);
   const todayWeekday = new Date().getDay();
-  const todaysGroups = owner ? groups.filter(g=>g.teacherId===owner.id && g.days && g.days.includes(todayWeekday)) : [];
-  const [groupId,setGroupId] = useState(todaysGroups[0]?todaysGroups[0].id:'');
+  const ownerGroups = owner ? groups.filter(g=>g.teacherId===owner.id) : [];
+  const todaysGroups = ownerGroups.filter(g=>g.days && g.days.includes(todayWeekday));
+  const otherGroups = ownerGroups.filter(g=>!(g.days && g.days.includes(todayWeekday)));
+  const defaultGroupId = todaysGroups[0] ? todaysGroups[0].id : (otherGroups[0] ? otherGroups[0].id : '');
+  const [groupId,setGroupId] = useState(defaultGroupId);
   const group = groups.find(g=>g.id===groupId);
   const [homework,setHomework] = useState(group?.nextHomework||'');
   const [recType,setRecType] = useState(group?.nextRecitationType||'recitation');
@@ -839,13 +844,27 @@ function NextSessionPrepPanel({groups,teachers,persistGroups,onDone}){
   };
 
   if(!owner) return <div className="muted small">معرفش أحدد مدرس صاحب الأكاديمية — تأكد من بيانات المدرسين.</div>;
-  if(todaysGroups.length===0) return <div className="muted small">مفيش مجموعات ليك النهاردة ({SCHED_DAY_NAMES[todayWeekday]}) — المفروض تدخل المطلوب بعد حصة النهاردة لمجموعة من مجموعاتك اللي عندها حصة النهاردة.</div>;
+  if(ownerGroups.length===0) return <div className="muted small">معرفش مجموعات مسجلة لمستر محمد سامي.</div>;
 
   return (
     <div>
-      <Field label="المجموعة (من مجموعاتك اللي عندها حصة النهاردة)">
+      {todaysGroups.length===0 && (
+        <div className="muted small" style={{marginBottom:10}}>
+          مفيش مجموعات ليك النهاردة ({SCHED_DAY_NAMES[todayWeekday]}) — تقدر برده تختار مجموعة من أيام فاتت وتدخل التجهيز بتاعها عادي (لسه فيه وقت قبل حصتها الجاية).
+        </div>
+      )}
+      <Field label="المجموعة">
         <select value={groupId} onChange={e=>selectGroup(e.target.value)}>
-          {todaysGroups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+          {todaysGroups.length>0 && (
+            <optgroup label={`مجموعات النهاردة (${SCHED_DAY_NAMES[todayWeekday]})`}>
+              {todaysGroups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+            </optgroup>
+          )}
+          {otherGroups.length>0 && (
+            <optgroup label="باقي المجموعات (أيام تانية)">
+              {otherGroups.map(g=><option key={g.id} value={g.id}>{g.name}{g.days&&g.days.length?` — ${g.days.map(d=>SCHED_DAY_NAMES[d]).join('،')}`:''}</option>)}
+            </optgroup>
+          )}
         </select>
       </Field>
       <Field label="صفحات الواجب"><input value={homework} onChange={e=>setHomework(e.target.value)} placeholder="مثال: صفحة 80" /></Field>
