@@ -348,6 +348,15 @@ const studentFee = (student, group) => {
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const todayISO = () => new Date().toISOString().slice(0,10);
+// Some phones' Arabic keyboards type Eastern Arabic/Persian digits (٠-٩ / ۰-۹) into number
+// fields, which `type="number"` inputs silently reject in several Android/iOS browsers — the
+// field LOOKS filled but the controlled value never actually updates, so a form's "save" button
+// appears to do nothing. Used on money-amount inputs that are prone to this (see PayoutForm) so
+// typing in any digit script, or pasting a "1,000"-style thousands separator, still parses.
+const toEnglishDigits = (str) => String(str==null?'':str)
+  .replace(/[٠-٩]/g, d => String(d.charCodeAt(0)-0x0660))
+  .replace(/[۰-۹]/g, d => String(d.charCodeAt(0)-0x06F0));
+const sanitizeAmountInput = (str) => toEnglishDigits(str).replace(/[^0-9.]/g,'');
 // Formats a Date using its LOCAL calendar fields (unlike toISOString, which converts to UTC
 // first and can shift the date by a day) — used when iterating a date range day by day.
 const dateToISO = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -1227,6 +1236,13 @@ function GlobalHeader({isAdmin,students}){
   );
 }
 
+// Kept in sync with NAV_SECTIONS inside App() below — used to validate a tab id restored from
+// localStorage (see the [tab] persistence effect in App) so an old/unknown value never gets
+// stuck as the active tab, and to know which tabs need an admin role.
+const APP_TAB_IDS = ['dashboard','students','groups','followup','accounting','private','schedule','trash','secretaryActivity'];
+const ADMIN_ONLY_TAB_IDS = new Set(['schedule','secretaryActivity']);
+const LAST_TAB_STORAGE_KEY = 'samyschool_lastTab';
+
 function App(){
   const [authLoading,setAuthLoading] = useState(true);
   const [user,setUser] = useState(null);
@@ -1235,7 +1251,16 @@ function App(){
   const [dataLoaded,setDataLoaded] = useState(false);
   const [loadErrors,setLoadErrors] = useState([]);
   const [receiptData,setReceiptData] = useState(null);
-  const [tab,setTab] = useState('dashboard');
+  // Restores whichever page was open before a refresh/reload instead of always dropping back to
+  // "الرئيسية" — Mohamed asked for this since refreshing used to always reset him to the
+  // dashboard regardless of what he was working on. Validated against APP_TAB_IDS so a stale id
+  // left over from an older version of the app can never get the user stuck on a blank screen.
+  const [tab,setTab] = useState(()=>{
+    try{
+      const saved = localStorage.getItem(LAST_TAB_STORAGE_KEY);
+      return APP_TAB_IDS.includes(saved) ? saved : 'dashboard';
+    }catch(e){ return 'dashboard'; }
+  });
   const [mobileNavOpen,setMobileNavOpen] = useState(false);
   const [teachers,setTeachers] = useState([]);
   const [groups,setGroups] = useState([]);
@@ -1484,6 +1509,20 @@ function App(){
     return ()=>{ clearInterval(interval); window.removeEventListener('beforeunload', onClose); };
   },[user,role,triggerCloudBackup]);
 
+  // Persist the active tab so a page refresh (or reopening the app) lands back where Mohamed
+  // left off instead of always resetting to "الرئيسية".
+  useEffect(()=>{
+    try{ localStorage.setItem(LAST_TAB_STORAGE_KEY, tab); }catch(e){}
+  },[tab]);
+
+  // Guard: a tab restored from localStorage could be admin-only (e.g. the same browser profile
+  // was previously used by the admin) while the signed-in role here is secretary — bounce back
+  // to the dashboard rather than render a tab the current role shouldn't see.
+  useEffect(()=>{
+    if(!role) return;
+    if(role!=='admin' && ADMIN_ONLY_TAB_IDS.has(tab)) setTab('dashboard');
+  },[role,tab]);
+
   if(authLoading){
     return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',fontWeight:800,color:'#8a7f78'}}>جارِ التحقق من الدخول...</div>;
   }
@@ -1539,7 +1578,7 @@ function App(){
         {id:'secretaryActivity', label:'نشاط السكرتيرة', icon:'🛡'},
       ] },
   ];
-  const ADMIN_ONLY_IDS = new Set(['schedule','secretaryActivity']);
+  const ADMIN_ONLY_IDS = ADMIN_ONLY_TAB_IDS;
 
   return (
     <React.Fragment>
@@ -5453,15 +5492,20 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
 }
 
 function PayoutForm({onCancel,onSave}){
+  // type="text"+inputMode="decimal" instead of type="number": some phones' Arabic keyboards
+  // send Eastern Arabic digits that type="number" fields silently refuse (see
+  // sanitizeAmountInput's comment) — this made the amount look typed on screen while the
+  // controlled value stayed empty, so "تسجيل الصرف" looked like it did nothing.
   const [amount,setAmount] = useState('');
   const [note,setNote] = useState('');
+  const amountNum = Number(amount)||0;
   return (
     <div>
-      <Field label="المبلغ المصروف (ج.م)"><input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" /></Field>
+      <Field label="المبلغ المصروف (ج.م)"><input type="text" inputMode="decimal" value={amount} onChange={e=>setAmount(sanitizeAmountInput(e.target.value))} placeholder="0" /></Field>
       <Field label="ملاحظة (اختياري)"><input value={note} onChange={e=>setNote(e.target.value)} placeholder="مثال: مستحقات شهر يناير" /></Field>
       <p className="small muted" style={{marginTop:-6,marginBottom:10}}>هيتسجل تلقائيًا كمصروف "رواتب" في تبويب المصروفات، وهينزل بنفس القيمة من "نسب المدرسين لسه متصرفتش" — مفيش حاجة محتاج تضيفها يدوي.</p>
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={()=>{ if(!amount || Number(amount)<=0){alert('أدخل مبلغ صحيح');return;} onSave({amount,note}); }}>تسجيل الصرف</button>
+        <button className="btn btn-primary" onClick={()=>{ if(!amount || amountNum<=0){alert('أدخل مبلغ صحيح');return;} onSave({amount:amountNum,note}); }}>تسجيل الصرف</button>
         <button className="btn btn-ghost" onClick={onCancel}>إلغاء</button>
       </div>
     </div>
@@ -5482,7 +5526,7 @@ function ExpenseForm({expense,categories,teachers,onCancel,onSave}){
         </Field>
       </div>
       <Field label="الوصف (اختياري)"><input value={f.description} onChange={e=>set('description',e.target.value)} /></Field>
-      <Field label="المبلغ (ج.م)"><input type="number" value={f.amount} onChange={e=>set('amount',e.target.value)} /></Field>
+      <Field label="المبلغ (ج.م)"><input type="text" inputMode="decimal" value={f.amount} onChange={e=>set('amount',sanitizeAmountInput(e.target.value))} /></Field>
       <Field label="هذا المصروف خاص بـ">
         <select value={f.owner||'academy'} onChange={e=>set('owner',e.target.value)}>
           <option value="academy">الأكاديمية (مصروف عام مشترك)</option>
