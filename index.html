@@ -4973,8 +4973,6 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
 
   const monthExpenses = expenses.filter(e=>e.date.startsWith(month));
   const totalExpenses = monthExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
-  const sharedExpenses = monthExpenses.filter(e=>!e.owner || e.owner==='academy');
-  const totalSharedExpenses = sharedExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
   // Any money actually paid toward this billing month counts immediately — including a
   // partial payment — not just students who've settled in full (see normalizePaymentRecord).
   const monthRevenue = payments.filter(p=>p.month===month).reduce((s,p)=>s+normalizePaymentRecord(p, p.amountDue||0).amountPaid,0);
@@ -5024,7 +5022,6 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
     return {teacher:t, revenue, share, pct:avgPct, academyCut: revenue-share};
   });
   const totalShares = teacherShares.reduce((s,t)=>s+t.share,0);
-  const academyCutFromTeachers = teacherShares.reduce((s,t)=>s+t.academyCut,0);
 
   // Teachers get paid in arrears — the report for a given month is meant to go out at that
   // month's end (school year starts Sep 1, so the first report is Sep 30). This just flags
@@ -5040,28 +5037,31 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   };
 
   let ownerBlock = null;
-  let ownerGrossRevenue = 0; // owner's revenue BEFORE subtracting his own tagged expenses — used for the academy-wide net below, so his expenses aren't subtracted twice
+  let ownerPrivateRevenue = 0; // owner's private-lesson revenue this month — pulled out of the block below so it can feed totalRevenueAll too
   if(owner){
     const {revenue:ownerGroupRevenue} = groupRevenue(owner);
-    const ownerPrivateRevenue = privateLessons
+    ownerPrivateRevenue = privateLessons
       .filter(p=>p.teacherId===owner.id && p.purchaseDate && p.purchaseDate.startsWith(month))
       .reduce((s,p)=>s+(Number(p.pricePerPackage)||0),0);
     const ownerExpenses = monthExpenses.filter(e=>e.owner===owner.id).reduce((s,e)=>s+(Number(e.amount)||0),0);
     const ownerNet = ownerGroupRevenue + ownerPrivateRevenue + totalRenterRevenue + monthNotebookRevenue - ownerExpenses;
-    ownerGrossRevenue = ownerGroupRevenue + ownerPrivateRevenue + totalRenterRevenue + monthNotebookRevenue;
     ownerBlock = {teacher:owner, ownerGroupRevenue, ownerPrivateRevenue, ownerRentRevenue: totalRenterRevenue, ownerNotebookRevenue: monthNotebookRevenue, ownerExpenses, ownerNet};
   }
 
-  // Overall academy net = the academy's cut of every commission teacher's revenue, plus the
-  // owner's own full revenue (his group/private/rent/notebook income all belongs to the
-  // academy), minus EVERY expense in the system in one place — no exceptions. Previously this
-  // subtracted `ownerExpenses` (inside ownerNet) + `totalSharedExpenses` separately, so an
-  // expense tagged to a specific NON-owner commission teacher ("خصم من حسابه الشخصي") matched
-  // neither filter and never got subtracted here at all — it reduced the cash in the drawer
-  // (treasuryNet, which always summed unfiltered totalExpenses) but silently vanished from
-  // "صافي ربح الأكاديمية", inflating it. Fixed per Mohamed (Oct 2026): "كل المصروفات بلا
-  // استثناء تتخصم من الايرادات كلها".
-  const academyNetProfit = academyCutFromTeachers + ownerGrossRevenue - totalExpenses;
+  // Final net-profit formula per Mohamed (Oct 2026), stated literally so the number on screen
+  // is built the exact same way he describes it — no indirection through per-teacher/owner
+  // sub-totals that made the previous presentation hard to verify by eye:
+  //   الإيراد الكلي (كل الاشتراكات من كل المدرسين + كل المذكرات + إيجار المستأجرين + الدروس
+  //   الخصوصية) − إجمالي كل المصروفات المسجلة (رواتب/فواتير/نضافة/مذكرات/أخرى، بدون نسب
+  //   المدرسين) − إجمالي نسب المدرسين (اللي بتتصرف لمدرسين النسبة) = صافي ربح الأكاديمية
+  // monthRevenue already covers subscription payments from EVERY teacher's students (commission
+  // teachers included, not just the owner's), so totalShares (money owed out to commission
+  // teachers) must be subtracted explicitly here as its own expense-like line rather than
+  // folded into a smaller "academy cut" revenue figure like before — same bottom-line math,
+  // but now the two clarifying totals (totalExpenses vs totalShares) are exactly what's shown
+  // on screen, so nothing is hidden inside a sub-calculation.
+  const totalRevenueAll = monthRevenue + monthNotebookRevenue + totalRenterRevenue + ownerPrivateRevenue;
+  const academyNetProfit = totalRevenueAll - totalExpenses - totalShares;
 
   const saveExpense = (data) => {
     if(data.id) persistExpenses(expenses.map(e=>e.id===data.id?data:e));
@@ -5230,10 +5230,26 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
       {isAdmin && view==='shares' && (
         <div>
           <div className="toolbar"><input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} /></div>
+
+          <div className="card" style={{marginBottom:18, borderColor:'var(--charcoal)'}}>
+            <div className="section-title">صافي ربح الأكاديمية — {monthLabel(month)}</div>
+            <table>
+              <tbody>
+                <tr><td>الإيراد الكلي (اشتراكات كل المدرسين + مذكرات + إيجار المستأجرين + دروس خصوصية)</td><td style={{fontWeight:800,color:'var(--green)'}}>+{fmtMoney(totalRevenueAll)}</td></tr>
+                <tr><td>إجمالي المصروفات (بدون نسب المدرسين) — رواتب وفواتير ونضافة ومذكرات وكل الأنواع</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalExpenses)}</td></tr>
+                <tr><td>إجمالي نسب المدرسين (المستحق لمدرسين نظام النسبة)</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalShares)}</td></tr>
+              </tbody>
+            </table>
+            <div style={{marginTop:14,paddingTop:14,borderTop:'2px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{fontWeight:900,fontSize:15}}>= صافي ربح الأكاديمية</div>
+              <div style={{fontWeight:900,fontSize:22,color:academyNetProfit>=0?'var(--green)':'var(--rose)'}}>{fmtMoney(academyNetProfit)}</div>
+            </div>
+          </div>
+
           <div className="grid grid-4" style={{marginBottom:18}}>
-            <div className="card"><div className="stat-label">الإيرادات المحصّلة</div><div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(monthRevenue)}</div></div>
-            <div className="card"><div className="stat-label">مصروفات مشتركة (عامة)</div><div className="stat-value" style={{color:'var(--rose)'}}>{fmtMoney(totalSharedExpenses)}</div></div>
-            <div className="card"><div className="stat-label">نصيب المدرسين (نسبة)</div><div className="stat-value" style={{color:'var(--amber)'}}>{fmtMoney(totalShares)}</div></div>
+            <div className="card"><div className="stat-label">الإيراد الكلي</div><div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(totalRevenueAll)}</div></div>
+            <div className="card"><div className="stat-label">إجمالي المصروفات (بدون نسب المدرسين)</div><div className="stat-value" style={{color:'var(--rose)'}}>{fmtMoney(totalExpenses)}</div></div>
+            <div className="card"><div className="stat-label">إجمالي نسب المدرسين</div><div className="stat-value" style={{color:'var(--amber)'}}>{fmtMoney(totalShares)}</div></div>
             <div className="card"><div className="stat-label">صافي ربح الأكاديمية</div><div className="stat-value" style={{color:academyNetProfit>=0?'var(--green)':'var(--rose)'}}>{fmtMoney(academyNetProfit)}</div></div>
           </div>
 
@@ -5290,7 +5306,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
                   </tr>
                 </tbody>
               </table>
-              <p className="small muted" style={{marginTop:10}}>صافي ربح الأكاديمية فوق = إيرادات مستر محمد سامي كاملة (قبل خصم مصروفاته الخاصة) + نصيب الأكاديمية من باقي المدرسين، وبعدين تتطرح منه كل مصروفات الشهر كلها (المشتركة وأي مصروف خاص بأي مدرس) مرة واحدة.</p>
+              <p className="small muted" style={{marginTop:10}}>ده حساب مستر محمد سامي الشخصي بس (إيراداته هو مطروح منها مصروفاته الخاصة اللي اتحطت "خاص بيه") — مش صافي ربح الأكاديمية. صافي ربح الأكاديمية هو الرقم الموضح فوق في جدول "الإيراد الكلي − كل المصروفات − نسب المدرسين".</p>
             </div>
           )}
         </div>
