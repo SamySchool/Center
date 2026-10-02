@@ -5008,6 +5008,14 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   const [creating,setCreating] = useState(null);
   const [payingOut,setPayingOut] = useState(null); // teacher obj or null
 
+  // makePersist updates React state optimistically BEFORE the Firestore write is confirmed, so
+  // if the server later rejects the write (most likely cause: a missing/incorrect security rule
+  // for this collection — see the diagnostic alert in savePayout below), the on-screen change can
+  // flash and then silently revert a moment later once the real onSnapshot data comes back. Refs
+  // (not the plain `teacherPayouts`/`expenses` props, which are only fresh as of the last render)
+  // let a delayed check inside savePayout see whatever the CURRENT state actually is.
+  const teacherPayoutsLiveRef = React.useRef(teacherPayouts); teacherPayoutsLiveRef.current = teacherPayouts;
+
   const EXPENSE_CATEGORIES = ['إيجار','فواتير (كهرباء/مياه/إنترنت)','رواتب','صيانة وتجهيزات','دعاية وتسويق','مذكرات ومواد تعليمية','أخرى'];
 
   const monthExpenses = expenses.filter(e=>e.date.startsWith(month));
@@ -5048,14 +5056,31 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   // payoutExpensesTotal/remainingTeacherShares below — with zero net change to صافي ربح
   // الأكاديمية, since it was already counted as an accrued cost either way.
   const savePayout = (data) => {
+    if(!payingOut) return; // defensive: the modal only renders while payingOut is set, but guard anyway
     const recipientLabel = isAdmin ? 'مستر محمد سامي' : 'السكرتيرة';
     const amount = Number(data.amount)||0;
+    if(!amount || amount<=0){ alert('المبلغ غير صحيح'); return; }
     const date = todayISO();
     const payoutId = uid();
     const expenseId = uid();
-    persistTeacherPayouts([...teacherPayouts, {id:payoutId, teacherId:payingOut.id, amount, note:data.note, date, recordedBy:recipientLabel, expenseId}]);
-    persistExpenses([...expenses, {id:expenseId, date, category:'رواتب', description:`صرف نصيب ${payingOut.name}${data.note?' — '+data.note:''}`, amount, owner:payingOut.id, payoutId}]);
+    const teacherId = payingOut.id;
+    const teacherName = payingOut.name;
+    persistTeacherPayouts([...teacherPayouts, {id:payoutId, teacherId, amount, note:data.note, date, recordedBy:recipientLabel, expenseId}]);
+    persistExpenses([...expenses, {id:expenseId, date, category:'رواتب', description:`صرف نصيب ${teacherName}${data.note?' — '+data.note:''}`, amount, owner:teacherId, payoutId}]);
     setPayingOut(null);
+    // Immediate feedback so "did it actually do anything?" is never a mystery, plus a delayed
+    // self-check: if the Firestore write gets rejected by the server (almost always a missing
+    // security rule for "teacherPayouts" — exactly the pattern Mohamed has hit before with
+    // other collections), makePersist's optimistic update shows the change for a moment and
+    // then silently reverts when the real data comes back — this catches that and says so
+    // plainly instead of leaving it looking like the button "did nothing".
+    alert(`تم تسجيل صرف ${fmtMoney(amount)} لمستر ${teacherName} ✅`);
+    setTimeout(()=>{
+      const stillThere = teacherPayoutsLiveRef.current.some(p=>p.id===payoutId);
+      if(!stillThere){
+        alert(`⚠️ صرف ${teacherName} (${fmtMoney(amount)}) اللي سجلته ظهر لحظة وبعدين اختفى لوحده — يعني الحفظ على السيرفر اترفض. الأغلب إن صلاحيات Firestore (Rules) لمجموعة "teacherPayouts" ناقصة أو مش متطابقة مع "expenses". محتاج حد يراجعها في Firebase Console.`);
+      }
+    }, 3000);
   };
 
   // Per Mohamed's call: a teacher's share is computed on whatever has actually been paid so
