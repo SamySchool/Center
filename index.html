@@ -5020,6 +5020,20 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
 
   const monthExpenses = expenses.filter(e=>e.date.startsWith(month));
   const totalExpenses = monthExpenses.reduce((s,e)=>s+(Number(e.amount)||0),0);
+  // Mohamed pays commission teachers in arrears — on day 1 of the NEW month he settles the
+  // PREVIOUS month's commission (students, by contrast, pay in advance). So a payout recorded
+  // on Oct 1 for September's commission is real cash leaving the drawer on Oct 1 (correct for
+  // `monthExpenses`/`totalExpenses`/treasuryNet above, which must stay real-date based for
+  // daily-cash reconciliation to match actual drawer movements) but it settles SEPTEMBER's
+  // accrued obligation, not October's — October's own net profit shouldn't be dinged for a
+  // commission payout that has nothing to do with October's revenue, and September's net
+  // profit needs to show that expense in September to correctly offset `remainingTeacherShares`
+  // there (see payoutExpensesTotal below). `forMonth` (set in savePayout to whichever month was
+  // selected in the view when "تسجيل صرف" was clicked — i.e. September, if that's the month
+  // Mohamed switched back to in order to settle it) carries that distinction; this expense set
+  // is ONLY for net-profit/commission-matching purposes, never for the cash-ledger views.
+  const monthExpensesForNetProfit = expenses.filter(e=> e.payoutId ? e.forMonth===month : (e.date && e.date.startsWith(month)));
+  const totalExpensesForNetProfit = monthExpensesForNetProfit.reduce((s,e)=>s+(Number(e.amount)||0),0);
   // Any money actually paid toward this billing month counts immediately — including a
   // partial payment — not just students who've settled in full (see normalizePaymentRecord).
   const monthRevenue = payments.filter(p=>p.month===month).reduce((s,p)=>s+normalizePaymentRecord(p, p.amountDue||0).amountPaid,0);
@@ -5065,8 +5079,15 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
     const expenseId = uid();
     const teacherId = payingOut.id;
     const teacherName = payingOut.name;
-    persistTeacherPayouts([...teacherPayouts, {id:payoutId, teacherId, amount, note:data.note, date, recordedBy:recipientLabel, expenseId}]);
-    persistExpenses([...expenses, {id:expenseId, date, category:'رواتب', description:`صرف نصيب ${teacherName}${data.note?' — '+data.note:''}`, amount, owner:teacherId, payoutId}]);
+    // `date` stays the REAL day the cash leaves the drawer (today) — correct for treasury/daily
+    // cash. `forMonth` is the month being SETTLED: since teachers are paid in arrears, Mohamed
+    // records this payout while the month selector above is switched back to the month he's
+    // paying out (e.g. he settles September on Oct 1 by first switching the view to September)
+    // — so `month` (the currently-viewed month, not today's real month) is exactly what
+    // monthExpensesForNetProfit/payoutExpensesTotal need to attribute this expense correctly.
+    const forMonth = month;
+    persistTeacherPayouts([...teacherPayouts, {id:payoutId, teacherId, amount, note:data.note, date, forMonth, recordedBy:recipientLabel, expenseId}]);
+    persistExpenses([...expenses, {id:expenseId, date, forMonth, category:'رواتب', description:`صرف نصيب ${teacherName} — مستحقات ${monthLabel(forMonth)}${data.note?' — '+data.note:''}`, amount, owner:teacherId, payoutId}]);
     setPayingOut(null);
     // Immediate feedback so "did it actually do anything?" is never a mystery, plus a delayed
     // self-check: if the Firestore write gets rejected by the server (almost always a missing
@@ -5074,7 +5095,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
     // other collections), makePersist's optimistic update shows the change for a moment and
     // then silently reverts when the real data comes back — this catches that and says so
     // plainly instead of leaving it looking like the button "did nothing".
-    alert(`تم تسجيل صرف ${fmtMoney(amount)} لمستر ${teacherName} ✅`);
+    alert(`تم تسجيل صرف ${fmtMoney(amount)} لمستر ${teacherName} عن مستحقات ${monthLabel(forMonth)} ✅`);
     setTimeout(()=>{
       const stillThere = teacherPayoutsLiveRef.current.some(p=>p.id===payoutId);
       if(!stillThere){
@@ -5110,8 +5131,10 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   // Only expenses created BY the new payout flow (savePayout, tagged with payoutId) count here
   // — this is what actually offsets totalShares below, so an old/legacy teacherPayouts doc with
   // no matching expense (recorded before this fix existed) correctly leaves totalShares
-  // untouched, exactly like academyNetProfit behaved before this change.
-  const payoutExpensesTotal = monthExpenses.filter(e=>e.payoutId).reduce((s,e)=>s+(Number(e.amount)||0),0);
+  // untouched, exactly like academyNetProfit behaved before this change. Matched by `forMonth`
+  // (the month being SETTLED), not by real transaction date — see monthExpensesForNetProfit's
+  // comment above for why a payout dated Oct 1 can still belong to September here.
+  const payoutExpensesTotal = monthExpensesForNetProfit.filter(e=>e.payoutId).reduce((s,e)=>s+(Number(e.amount)||0),0);
   const remainingTeacherShares = totalShares - payoutExpensesTotal;
 
   // Teachers get paid in arrears — the report for a given month is meant to go out at that
@@ -5151,10 +5174,13 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   // figure like before. It's subtracted as `remainingTeacherShares` (= totalShares minus
   // whatever of it has already been turned into a real expense via a recorded payout) rather
   // than the raw `totalShares`, so that once a payout is recorded and its matching expense
-  // lands in totalExpenses, that same amount isn't ALSO still sitting in the "نسب المدرسين"
-  // line — it just moved from one visible bucket to the other, net profit unchanged either way.
+  // lands in totalExpensesForNetProfit, that same amount isn't ALSO still sitting in the "نسب
+  // المدرسين" line — it just moved from one visible bucket to the other, net profit unchanged
+  // either way. Uses totalExpensesForNetProfit (forMonth-matched for payout expenses), NOT the
+  // real-date-based totalExpenses, so a commission payout settled on day 1 of the next month
+  // still lands in the month whose revenue it's actually paying out of.
   const totalRevenueAll = monthRevenue + monthNotebookRevenue + totalRenterRevenue + ownerPrivateRevenue;
-  const academyNetProfit = totalRevenueAll - totalExpenses - remainingTeacherShares;
+  const academyNetProfit = totalRevenueAll - totalExpensesForNetProfit - remainingTeacherShares;
 
   const saveExpense = (data) => {
     if(data.id) persistExpenses(expenses.map(e=>e.id===data.id?data:e));
@@ -5335,7 +5361,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
             <table>
               <tbody>
                 <tr><td>الإيراد الكلي (اشتراكات كل المدرسين + مذكرات + إيجار المستأجرين + دروس خصوصية)</td><td style={{fontWeight:800,color:'var(--green)'}}>+{fmtMoney(totalRevenueAll)}</td></tr>
-                <tr><td>إجمالي المصروفات — رواتب وفواتير ونضافة ومذكرات وكل الأنواع (بما فيها نسب المدرسين اللي اتصرفت فعلاً)</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalExpenses)}</td></tr>
+                <tr><td>إجمالي المصروفات — رواتب وفواتير ونضافة ومذكرات وكل الأنواع (بما فيها نسب المدرسين اللي اتصرفت وبتخص شهر {monthLabel(month)})</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(totalExpensesForNetProfit)}</td></tr>
                 <tr><td>إجمالي نسب المدرسين اللي لسه متصرفتش (مستحقة بس مش مدفوعة)</td><td style={{fontWeight:800,color:'var(--rose)'}}>−{fmtMoney(remainingTeacherShares)}</td></tr>
               </tbody>
             </table>
@@ -5343,12 +5369,13 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
               <div style={{fontWeight:900,fontSize:15}}>= صافي ربح الأكاديمية</div>
               <div style={{fontWeight:900,fontSize:22,color:academyNetProfit>=0?'var(--green)':'var(--rose)'}}>{fmtMoney(academyNetProfit)}</div>
             </div>
-            {payoutExpensesTotal>0 && <p className="small muted" style={{marginTop:10}}>من إجمالي نسب المدرسين لشهر {monthLabel(month)} ({fmtMoney(totalShares)})، اتصرف فعلاً وسُجّل كمصروف {fmtMoney(payoutExpensesTotal)} — وده اللي خلى "إجمالي نسب المدرسين" فوق ينزل ويتزود بنفس القيمة في "إجمالي المصروفات"، من غير ما يأثر على صافي الربح.</p>}
+            {payoutExpensesTotal>0 && <p className="small muted" style={{marginTop:10}}>من إجمالي نسب المدرسين لشهر {monthLabel(month)} ({fmtMoney(totalShares)})، اتصرف فعلاً وسُجّل كمصروف {fmtMoney(payoutExpensesTotal)} — وده اللي خلى "إجمالي نسب المدرسين" فوق ينزل ويتزود بنفس القيمة في "إجمالي المصروفات"، من غير ما يأثر على صافي الربح. المصروف ده بيتحسب هنا على شهر {monthLabel(month)} حتى لو الصرف الفعلي حصل أول الشهر اللي بعده (لأن المدرسين بتتحاسب مؤخر).</p>}
+            {totalExpensesForNetProfit!==totalExpenses && <p className="small muted" style={{marginTop:4}}>ملحوظة: الرقم فوق يختلف عن إجمالي مصروفات {monthLabel(month)} الظاهر في تبويب "المصروفات" ({fmtMoney(totalExpenses)}) لو فيه صرف نسبة اتسجل فعليًا في شهر تاني لكنه بيخص استحقاقات الشهر ده — الرقم هنا هو الصح لحساب الصافي.</p>}
           </div>
 
           <div className="grid grid-4" style={{marginBottom:18}}>
             <div className="card"><div className="stat-label">الإيراد الكلي</div><div className="stat-value" style={{color:'var(--green)'}}>{fmtMoney(totalRevenueAll)}</div></div>
-            <div className="card"><div className="stat-label">إجمالي المصروفات</div><div className="stat-value" style={{color:'var(--rose)'}}>{fmtMoney(totalExpenses)}</div></div>
+            <div className="card"><div className="stat-label">إجمالي المصروفات</div><div className="stat-value" style={{color:'var(--rose)'}}>{fmtMoney(totalExpensesForNetProfit)}</div></div>
             <div className="card"><div className="stat-label">نسب المدرسين (لسه متصرفتش)</div><div className="stat-value" style={{color:'var(--amber)'}}>{fmtMoney(remainingTeacherShares)}</div></div>
             <div className="card"><div className="stat-label">صافي ربح الأكاديمية</div><div className="stat-value" style={{color:academyNetProfit>=0?'var(--green)':'var(--rose)'}}>{fmtMoney(academyNetProfit)}</div></div>
           </div>
@@ -5368,10 +5395,15 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
           <div className="card" style={{marginBottom:18}}>
             <div className="section-title">مدرسين نظام النسبة — {monthLabel(month)}</div>
             <table>
-              <thead><tr><th>المدرس</th><th>إيرادات مجموعاته</th><th>نسبته</th><th>نصيبه (يُصرف له)</th><th>نصيب الأكاديمية</th><th>اتصرفله الشهر ده</th><th>متبقي له</th><th></th></tr></thead>
+              <thead><tr><th>المدرس</th><th>إيرادات مجموعاته</th><th>نسبته</th><th>نصيبه (يُصرف له)</th><th>نصيب الأكاديمية</th><th>اتصرفله عن الشهر ده</th><th>متبقي له</th><th></th></tr></thead>
               <tbody>
                 {teacherShares.map(t=>{
-                  const paidToThisTeacher = monthPayoutsList.filter(p=>p.teacherId===t.teacher.id).reduce((s,p)=>s+(Number(p.amount)||0),0);
+                  // Matched by forMonth (which commission month a payout SETTLES), falling back
+                  // to real date for payouts recorded before this field existed — same reasoning
+                  // as monthExpensesForNetProfit above: a payout made Oct 1 for September's
+                  // commission must still count against September here, not October, or this
+                  // column and "متبقي له" would look wrong for the exact month being settled.
+                  const paidToThisTeacher = teacherPayouts.filter(p=>p.teacherId===t.teacher.id && (p.forMonth ? p.forMonth===month : (p.date && p.date.startsWith(month)))).reduce((s,p)=>s+(Number(p.amount)||0),0);
                   const remainingForTeacher = t.share - paidToThisTeacher;
                   return (
                   <tr key={t.teacher.id}>
@@ -5508,7 +5540,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
         </Modal>
       )}
       {payingOut && (
-        <Modal title={`تسجيل صرف مستحق — ${payingOut.name}`} onClose={()=>setPayingOut(null)}>
+        <Modal title={`تسجيل صرف مستحق — ${payingOut.name} (عن مستحقات ${monthLabel(month)})`} onClose={()=>setPayingOut(null)}>
           <PayoutForm onCancel={()=>setPayingOut(null)} onSave={savePayout} />
         </Modal>
       )}
