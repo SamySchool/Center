@@ -392,7 +392,10 @@ const normalizeEgyptPhone = (phone) => {
 
 function computeStudentMonthStats(student, month, attendance, grades, payments, groupById){
   const group = groupById(student.groupId);
-  const monthAttendance = attendance.filter(a=>a.groupId===student.groupId && a.date.startsWith(month) && a.records && (student.id in a.records)).sort((a,b)=>a.date.localeCompare(b.date));
+  // Regular attendance rate/sessions: only "regular" sessions, excluding anything flagged
+  // "cancelled" (a flexible/optional session the admin called off that day — see the ⛔ toggle
+  // in AttendanceTab) so a cancelled occurrence never counts as, or costs, an absence.
+  const monthAttendance = attendance.filter(a=>a.groupId===student.groupId && a.date.startsWith(month) && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (student.id in a.records)).sort((a,b)=>a.date.localeCompare(b.date));
   const presentCount = monthAttendance.filter(a=>attStatus(a.records[student.id])==='present').length;
   const absentDates = monthAttendance.filter(a=>attStatus(a.records[student.id])==='absent').map(a=>a.date);
   const rate = monthAttendance.length ? Math.round((presentCount/monthAttendance.length)*100) : null;
@@ -420,7 +423,22 @@ function computeStudentMonthStats(student, month, attendance, grades, payments, 
     : null;
   const homeworkDoneCount = sessions.filter(s=>s.homework===true).length;
   const homeworkTrackedCount = sessions.filter(s=>s.homework===true||s.homework===false).length;
-  return {group, rate, absentDates, monthExams, examsAvg, paid, sessions, recitationAvg, homeworkDoneCount, homeworkTrackedCount};
+
+  // High-Level (extra-curriculum) sessions: a completely separate list — movable, not tied to
+  // the student's normal schedule — shown in the report with full date/day-name/time instead of
+  // being mixed into the regular attendance rate above.
+  const monthHighlevel = attendance.filter(a=>a.groupId===student.groupId && a.date.startsWith(month) && a.sessionType==='highlevel' && a.records && (student.id in a.records)).sort((a,b)=>a.date.localeCompare(b.date));
+  const highlevelSessions = monthHighlevel.map(a=>{
+    const rec = a.records[student.id];
+    const [y,mo,da] = a.date.split('-').map(Number);
+    const dayName = SCHED_DAY_NAMES[new Date(y,mo-1,da).getDay()];
+    const status = attStatus(rec);
+    const checkinAt = (rec && typeof rec==='object' && rec.checkinAt) ? rec.checkinAt : null;
+    const time = checkinAt ? new Date(checkinAt).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit',hour12:true}) : null;
+    return {date:a.date, dayName, status, time};
+  });
+
+  return {group, rate, absentDates, monthExams, examsAvg, paid, sessions, recitationAvg, homeworkDoneCount, homeworkTrackedCount, highlevelSessions};
 }
 
 function buildWhatsAppReportLink(student, month, stats, teacher){
@@ -464,6 +482,14 @@ function buildWhatsAppReportLink(student, month, stats, teacher){
     });
   }
 
+  if(stats.highlevelSessions && stats.highlevelSessions.length>0){
+    lines.push(``, `🌟 حصص الهاي ليفل (منهج إضافي):`);
+    stats.highlevelSessions.forEach(s=>{
+      const statusTxt = s.status==='present'?'حاضر ✓':'غائب ✕';
+      lines.push(`• ${s.dayName} ${s.date}${s.time?` — الساعة ${s.time}`:''}: ${statusTxt}`);
+    });
+  }
+
   lines.push(``, `نتمنى له/لها المزيد من التقدم 🌱`, `SamySchool`);
   const text = encodeURIComponent(lines.join('\n'));
   return `https://wa.me/${phone}?text=${text}`;
@@ -473,7 +499,7 @@ function buildWhatsAppReportLink(student, month, stats, teacher){
 // (stops counting at the first "present" found going backwards from today).
 function consecutiveAbsences(student, attendance){
   const recs = attendance
-    .filter(a=> a.groupId===student.groupId && a.records && (student.id in a.records))
+    .filter(a=> a.groupId===student.groupId && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (student.id in a.records))
     .sort((a,b)=> b.date.localeCompare(a.date));
   let streak = 0;
   for(const r of recs){
@@ -1068,12 +1094,14 @@ function QuickAttendancePanel({students,groupById,attendance,persistAttendance,o
   const matches = studentSearchMatches(students, query);
   const date = todayISO();
   const g = selected ? groupById(selected.groupId) : null;
-  const rec = selected ? attendance.find(a=>a.groupId===selected.groupId && a.date===date) : null;
+  // Scoped to the regular session only — otherwise this could silently match/overwrite a
+  // same-day High-Level or cancelled-occurrence doc for the same group (different sessionType).
+  const rec = selected ? attendance.find(a=>a.groupId===selected.groupId && a.date===date && (a.sessionType||'regular')==='regular') : null;
   const currentStatus = rec && rec.records ? rec.records[selected?.id] : undefined;
 
   const mark = (status) => {
-    const others = attendance.filter(a=>!(a.groupId===selected.groupId && a.date===date));
-    const base = rec ? {...rec} : {id:uid(), groupId:selected.groupId, date, records:{}};
+    const others = attendance.filter(a=>!(a.groupId===selected.groupId && a.date===date && (a.sessionType||'regular')==='regular'));
+    const base = rec ? {...rec} : {id:uid(), groupId:selected.groupId, date, records:{}, sessionType:'regular'};
     base.records = {...base.records, [selected.id]:status};
     persistAttendance([...others, base]);
     onDone();
@@ -1422,7 +1450,7 @@ function App(){
   },[students,payments,currentMonth]);
 
   const todayAttendanceRate = useMemo(()=>{
-    const todays = attendance.filter(a=>a.date===todayISO());
+    const todays = attendance.filter(a=>a.date===todayISO() && (a.sessionType||'regular')==='regular' && !a.cancelled);
     if(todays.length===0) return null;
     let present=0,total=0;
     todays.forEach(rec=>{
@@ -2074,7 +2102,7 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
   const attendanceRate = (studentId) => {
     const recs = attendance.filter(a=>{
       const st = students.find(x=>x.id===studentId);
-      return st && a.groupId===st.groupId && a.records && (studentId in a.records);
+      return st && a.groupId===st.groupId && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (studentId in a.records);
     });
     if(recs.length===0) return null;
     const present = recs.filter(r=>attStatus(r.records[studentId])==='present').length;
@@ -2597,20 +2625,12 @@ function buildAbsenceWaLink(student, group, teacher, date){
   return `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
-// Loose match for "this teacher teaches English" since teacher.subject is free text
-// (used to restrict the movable High-Level attendance to English-track students only).
-function isEnglishSubject(teacher){
-  if(!teacher || !teacher.subject) return false;
-  const s = teacher.subject;
-  return /english/i.test(s) || s.includes('انجلي') || s.includes('إنجلي');
-}
-
 // Cross-group view of everyone absent TODAY, regardless of which teacher/group — so the
 // secretary can work through one single follow-up checklist instead of hunting per group.
 // "تم التواصل" and the reason live on the same attendance record as the absence itself.
 function TodayAbsencesPanel({students,groups,teachers,attendance,persistAttendance,groupById}){
   const today = todayISO();
-  const todaysDocs = attendance.filter(a=>a.date===today);
+  const todaysDocs = attendance.filter(a=>a.date===today && (a.sessionType||'regular')==='regular' && !a.cancelled);
 
   const rows = [];
   todaysDocs.forEach(doc=>{
@@ -2703,7 +2723,7 @@ function FollowupTab(props){
   );
 }
 
-function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup,teachers,groupById}){
+function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup,teachers,groupById,isAdmin}){
   const [mode,setMode] = useState('regular'); // 'regular' | 'highlevel'
   const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
   const [date,setDate] = useState(todayISO());
@@ -2711,6 +2731,7 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   const [showHistory,setShowHistory] = useState(false);
   const [autoSaved,setAutoSaved] = useState(false);
   const [docId,setDocId] = useState(null); // Firestore doc id for this group+date+mode, once resolved
+  const [cancelled,setCancelled] = useState(false); // this specific occurrence marked "cancelled" by admin — excluded from every absence/attendance-rate calculation
   const dirtyRef = React.useRef(false);
 
   // A group's scheduled weekdays (from GroupForm's day picker) decide which groups even show
@@ -2732,12 +2753,12 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   const group = groupById(groupId);
   const teacher = group ? teachers.find(t=>t.id===group.teacherId) : null;
 
-  // Regular roster = normal active students in the group. High-Level roster = only the
-  // English-track students (لغات/تجريبي) in that group, for the movable extra-curriculum
-  // session — independent of the group's fixed 2-day schedule.
+  // Regular roster = normal active students in the group. High-Level roster = only Mr. Mohamed
+  // Samy's (the owner's) own لغات/تجريبي students — they're the ones with the extra curriculum
+  // and the movable extra sessions for it — independent of the group's fixed schedule days.
   const fullRoster = studentsInGroup(groupId);
   const roster = mode==='highlevel'
-    ? fullRoster.filter(s=> (s.educationType==='لغات' || s.educationType==='تجريبي') && isEnglishSubject(teacher))
+    ? fullRoster.filter(s=> (s.educationType==='لغات' || s.educationType==='تجريبي') && teacher && teacher.isOwner)
     : fullRoster;
 
   const existing = attendance.find(a=>a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode);
@@ -2750,19 +2771,19 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   useEffect(()=>{
     dirtyRef.current = false;
     const ex = attendance.find(a=>a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode);
-    if(ex){ setRecords({...ex.records}); setDocId(ex.id); return; }
-    if(!groupId){ setRecords({}); setDocId(null); return; }
+    if(ex){ setRecords({...ex.records}); setDocId(ex.id); setCancelled(!!ex.cancelled); return; }
+    if(!groupId){ setRecords({}); setDocId(null); setCancelled(false); return; }
     if(date < attendanceSyncCutoff()){
-      setRecords({}); setDocId(undefined); // undefined = still checking
+      setRecords({}); setDocId(undefined); setCancelled(false); // undefined = still checking
       db.collection('attendance').where('groupId','==',groupId).where('date','==',date).limit(5).get()
         .then(snap=>{
           const match = snap.docs.find(d=>((d.data().sessionType)||'regular')===mode);
-          if(match){ setRecords({...match.data().records}); setDocId(match.id); }
+          if(match){ setRecords({...match.data().records}); setDocId(match.id); setCancelled(!!match.data().cancelled); }
           else setDocId(null);
         })
         .catch(()=>setDocId(null));
     }else{
-      setRecords({}); setDocId(null);
+      setRecords({}); setDocId(null); setCancelled(false);
     }
   },[groupId,date,mode]);
 
@@ -2772,7 +2793,7 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
     if(!dirtyRef.current) return;
     if(docId===undefined) return; // still resolving whether an older doc already exists
     const t = setTimeout(()=>{
-      const rec = {id: docId||uid(), groupId, date, records, sessionType:mode};
+      const rec = {id: docId||uid(), groupId, date, records, sessionType:mode, cancelled};
       const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode));
       persistAttendance([...others, rec]);
       if(!docId) setDocId(rec.id);
@@ -2781,7 +2802,7 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
       setTimeout(()=>setAutoSaved(false), 2000);
     }, 900);
     return ()=>clearTimeout(t);
-  },[records]);
+  },[records,cancelled]);
 
   const toggle = (sid) => {
     setRecords(r=>{
@@ -2815,9 +2836,19 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
     dirtyRef.current = true;
   };
 
+  // Admin-only: flags this ONE occurrence (this group, this exact date) as cancelled — e.g.
+  // the flexible/optional Saturday session some weeks don't happen. A cancelled occurrence is
+  // excluded everywhere attendance rate, absence streaks, and today's-absences follow-up are
+  // computed, so skipping it never counts against any student.
+  const toggleCancelled = () => {
+    if(!isAdmin) return;
+    setCancelled(c=>!c);
+    dirtyRef.current = true;
+  };
+
   const save = () => {
     if(docId===undefined){ alert('لسه بيتحقق من سجل قديم لنفس اليوم، استنى ثانية وحاول تاني.'); return; }
-    const rec = {id: docId||uid(), groupId, date, records, sessionType:mode};
+    const rec = {id: docId||uid(), groupId, date, records, sessionType:mode, cancelled};
     const others = attendance.filter(a=>!(a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode));
     persistAttendance([...others, rec]);
     if(!docId) setDocId(rec.id);
@@ -2854,10 +2885,21 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
         {mode==='regular' && <span className={"chip "+(showAllGroups?'active':'')} onClick={()=>setShowAllGroups(!showAllGroups)}>عرض كل المجموعات (مش بس يوم النهاردة)</span>}
         <button className="btn btn-ghost btn-sm" onClick={()=>markAll('present')}>✓ تحديد الكل حاضر</button>
         <button className="btn btn-ghost btn-sm" onClick={()=>markAll('absent')}>✕ تحديد الكل غائب</button>
+        {mode==='regular' && isAdmin && groupId && (
+          <button className={"btn btn-sm "+(cancelled?'btn-danger':'btn-ghost')} onClick={toggleCancelled} title="تنفع لأي مجموعة لأي مدرس — لو حصلت ظروف وأي مدرس لغى حصته، دوس هنا عشان الحصة دي متتحسبش غياب على أي طالب">
+            {cancelled?'⛔ الحصة ملغاة — دوس للتراجع':'⛔ إلغاء حصة اليوم'}
+          </button>
+        )}
         <button className="btn btn-primary" style={{marginRight:'auto'}} onClick={save} disabled={!groupId || roster.length===0}>حفظ الحضور</button>
       </div>
 
-      {mode==='highlevel' && <div className="hint" style={{background:'#F3F6FB',borderRadius:8,padding:'10px 12px',fontSize:11.5,color:'var(--muted)',marginBottom:14}}>وضع الهاي ليفل: حضور منفصل تمامًا عن الحضور العادي، لطلاب اللغات والتجريبي بس، وتقدر تسجله أي يوم (مش لازم يوم المجموعة الأساسي).</div>}
+      {mode==='highlevel' && <div className="hint" style={{background:'#F3F6FB',borderRadius:8,padding:'10px 12px',fontSize:11.5,color:'var(--muted)',marginBottom:14}}>وضع الهاي ليفل: حضور منفصل تمامًا عن الحضور العادي، لطلاب مستر محمد سامي اللي مسجلين لغات/تجريبي بس، وتقدر تسجله أي يوم وأي وقت (مش لازم يوم المجموعة الأساسي ولا معاد الحصة العادي) — بيتثبت في تقاريرهم الشهرية بالتاريخ واليوم والوقت.</div>}
+
+      {mode==='regular' && cancelled && (
+        <div className="hint" style={{background:'#FFF1F0',border:'1px solid var(--rose)',borderRadius:8,padding:'10px 12px',fontSize:12,color:'var(--rose)',fontWeight:700,marginBottom:14}}>
+          ⛔ الحصة دي اتسجلت "ملغاة" — مش هتتحسب في نسبة حضور ولا غياب ولا متابعة غيابات أي طالب، حتى لو سجلت حضور لحد هنا.
+        </div>
+      )}
 
       {!groupId || roster.length===0 ? (
         <div className="card"><Empty icon="✓" text={
@@ -2925,7 +2967,7 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
                   const vals = Object.values(h.records||{}).map(attStatus);
                   const p = vals.filter(v=>v==='present').length;
                   const a = vals.filter(v=>v==='absent').length;
-                  return <tr key={h.id}><td>{h.date}</td><td><span className="badge badge-green">{p}</span></td><td><span className="badge badge-rose">{a}</span></td><td>{vals.length}</td></tr>;
+                  return <tr key={h.id}><td>{h.date}{h.cancelled && <span className="badge badge-rose" style={{marginRight:6}}>ملغاة</span>}</td><td><span className="badge badge-green">{p}</span></td><td><span className="badge badge-rose">{a}</span></td><td>{vals.length}</td></tr>;
                 })}
               </tbody>
             </table>
@@ -3177,28 +3219,33 @@ function buildFullReminderWaLink(student, teacher, group, payments, isOwnerStude
   return `https://wa.me/${phone}?text=${encodeURIComponent(r.text)}`;
 }
 
-// Comprehensive confirmation: every paid/partially-paid month found + paid notebook amount
-// (owner's students only) — a single "here's everything you've settled" message, rather
-// than only confirming whichever one payment was just entered.
-function buildFullConfirmText(student, teacher, group, payments, isOwnerStudent){
-  const paid = studentPaidMonths(student, group, payments);
+// Confirmation message — scoped to the ONE month currently being viewed/paid for only
+// (previously this re-listed every historical paid month found in the last 6 real-calendar
+// months, so paying October also re-showed September's already-confirmed payment — confusing
+// for parents who'd think they were being asked about September again). Notebook fee is a
+// one-time charge (not monthly), so it's still included whenever there's something paid on it.
+function buildMonthConfirmText(student, teacher, group, payments, isOwnerStudent, month){
+  const due = studentFee(student, group);
+  const norm = normalizePaymentRecord(payments.find(p=>p.studentId===student.id && p.month===month), due);
   const nb = isOwnerStudent ? normalizeNotebookStatus(student) : {paid:0};
   const lines = [`مرحبًا 🌟 نأكد المدفوعات المسددة للابن/ة *${student.name}*:`, ``];
   let total = 0;
-  paid.forEach(p=>{
-    lines.push(`📅 ${monthLabel(p.month)}: ${fmtMoney(p.paid)}${p.full?' ✅':' (دفعة جزئية)'}`);
-    total += p.paid;
-  });
-  if(nb.paid>0){ lines.push(`📓 رسوم المذكرة: ${fmtMoney(nb.paid)}${nb.isPaid?' ✅':' (دفعة جزئية)'}`); total += nb.paid; }
+  let hasAnything = false;
+  if(norm.amountPaid>0){
+    lines.push(`📅 ${monthLabel(month)}: ${fmtMoney(norm.amountPaid)}${norm.paid?' ✅':' (دفعة جزئية)'}`);
+    total += norm.amountPaid;
+    hasAnything = true;
+  }
+  if(nb.paid>0){ lines.push(`📓 رسوم المذكرة: ${fmtMoney(nb.paid)}${nb.isPaid?' ✅':' (دفعة جزئية)'}`); total += nb.paid; hasAnything = true; }
   lines.push(``, `💰 إجمالي المدفوع: ${fmtMoney(total)}`, ``, `شكرًا لثقتكم 🙏`);
   if(teacher) lines.push(`المدرس: مستر ${teacher.name}`);
   lines.push(`SamySchool`);
-  return {text: lines.join('\n'), total, hasAnything: paid.length>0 || nb.paid>0};
+  return {text: lines.join('\n'), total, hasAnything};
 }
-function buildFullConfirmWaLink(student, teacher, group, payments, isOwnerStudent){
+function buildMonthConfirmWaLink(student, teacher, group, payments, isOwnerStudent, month){
   const phone = normalizeEgyptPhone(student.parentPhone);
   if(!phone) return null;
-  const r = buildFullConfirmText(student, teacher, group, payments, isOwnerStudent);
+  const r = buildMonthConfirmText(student, teacher, group, payments, isOwnerStudent, month);
   if(!r.hasAnything) return null;
   return `https://wa.me/${phone}?text=${encodeURIComponent(r.text)}`;
 }
@@ -3376,7 +3423,7 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
                 const teacher = teacherFor(s);
                 const nb = normalizeNotebookStatus(s);
                 const reminderLink = buildFullReminderWaLink(s, teacher, g, payments, owner);
-                const confirmLink = buildFullConfirmWaLink(s, teacher, g, payments, owner);
+                const confirmLink = buildMonthConfirmWaLink(s, teacher, g, payments, owner, month);
                 return (
                   <tr key={s.id}>
                     <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
@@ -5196,7 +5243,7 @@ function AccountingTab({teachers,groups,students,persistStudents,attendance,paym
   };
 
   // daily report
-  const dayAttendance = attendance.filter(a=>a.date===day);
+  const dayAttendance = attendance.filter(a=>a.date===day && (a.sessionType||'regular')==='regular' && !a.cancelled);
   let dayPresent=0, dayAbsent=0;
   dayAttendance.forEach(rec=> Object.values(rec.records||{}).forEach(v=>{ if(v==='present') dayPresent++; else dayAbsent++; }));
   // Same day-based receipt sum as the daily cash tab / jard — tuition + notebooks + rent,
@@ -5620,11 +5667,13 @@ function ScanAttendanceTab({groups,students,attendance,persistAttendance,payment
       setFeedback({type:'rose', title:'الطالب غير مسجل في أي مجموعة', lines:[student.name]});
       return;
     }
-    const existing = attendance.find(a=>a.groupId===g.id && a.date===date);
+    // Scoped to the regular session only, so a same-day High-Level or cancelled-occurrence doc
+    // for the same group (different sessionType) is never matched/overwritten here.
+    const existing = attendance.find(a=>a.groupId===g.id && a.date===date && (a.sessionType||'regular')==='regular');
     const records = existing ? {...existing.records} : {};
     records[student.id] = 'present';
-    const rec = {id: existing?existing.id:uid(), groupId:g.id, date, records};
-    const others = attendance.filter(a=>!(a.groupId===g.id && a.date===date));
+    const rec = {id: existing?existing.id:uid(), groupId:g.id, date, records, sessionType:'regular'};
+    const others = attendance.filter(a=>!(a.groupId===g.id && a.date===date && (a.sessionType||'regular')==='regular'));
     persistAttendance([...others, rec]);
 
     const mk = monthKey();
@@ -5785,11 +5834,13 @@ function FaceAttendanceTab({groups,students,persistStudents,attendance,persistAt
   const markPresent = (student) => {
     const g = groupById(student.groupId);
     if(!g) return;
-    const existing = attendance.find(a=>a.groupId===g.id && a.date===date);
+    // Scoped to the regular session only, so a same-day High-Level or cancelled-occurrence doc
+    // for the same group (different sessionType) is never matched/overwritten here.
+    const existing = attendance.find(a=>a.groupId===g.id && a.date===date && (a.sessionType||'regular')==='regular');
     const records = existing ? {...existing.records} : {};
     records[student.id] = 'present';
-    const rec = {id: existing?existing.id:uid(), groupId:g.id, date, records};
-    const others = attendance.filter(a=>!(a.groupId===g.id && a.date===date));
+    const rec = {id: existing?existing.id:uid(), groupId:g.id, date, records, sessionType:'regular'};
+    const others = attendance.filter(a=>!(a.groupId===g.id && a.date===date && (a.sessionType||'regular')==='regular'));
     persistAttendance([...others, rec]);
     const mk = monthKey();
     const paid = payments.some(p=>p.studentId===student.id && p.month===mk && p.paid);
