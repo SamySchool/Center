@@ -6042,10 +6042,28 @@ function ReportsTab({students,groups,teachers,attendance,grades,payments,groupBy
   const [showBulk,setShowBulk] = useState(false);
   const [extraAttendance,setExtraAttendance] = useState([]);
   const [loadingOlder,setLoadingOlder] = useState(false);
+  const [filterGroup,setFilterGroup] = useState('all'); // group dropdown — narrows the student list while sending reports one by one
+  const [query,setQuery] = useState(''); // search by student name
 
   useEffect(()=>{ if(!studentId && students[0]) setStudentId(students[0].id); },[students]);
 
   const student = students.find(s=>s.id===studentId);
+  // If the group/name filter narrows the list away from whichever student is currently
+  // selected, jump to the first match instead of leaving the dropdown stuck on a hidden option.
+  useEffect(()=>{
+    if(filteredStudents.length===0) return;
+    if(!filteredStudents.some(s=>s.id===studentId)) setStudentId(filteredStudents[0].id);
+  },[filterGroup,query]);
+
+  // Narrows both the single-student dropdown above and the bulk-send table below — picking a
+  // group first, then searching by name, makes it practical to find one student among dozens
+  // when going down the list sending reports/WhatsApp messages one after another.
+  const filteredStudents = students.filter(s=>{
+    const matchG = filterGroup==='all' || s.groupId===filterGroup;
+    const q = query.trim().toLowerCase();
+    const matchQ = !q || s.name.toLowerCase().includes(q);
+    return matchG && matchQ;
+  });
 
   // The live "attendance" prop only covers the last ATTENDANCE_SYNC_DAYS (see App()).
   // If the selected report month falls before that window, fetch just that one month
@@ -6078,9 +6096,14 @@ function ReportsTab({students,groups,teachers,attendance,grades,payments,groupBy
       </div>
 
       <div className="toolbar no-print">
+        <select style={{maxWidth:220}} value={filterGroup} onChange={e=>setFilterGroup(e.target.value)}>
+          <option value="all">كل المجموعات</option>
+          {groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+        <input className="search" style={{maxWidth:200}} placeholder="دوّر باسم الطالب..." value={query} onChange={e=>setQuery(e.target.value)} />
         <select style={{maxWidth:260}} value={studentId} onChange={e=>setStudentId(e.target.value)}>
-          {students.length===0 && <option value="">لا يوجد طلاب</option>}
-          {students.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+          {filteredStudents.length===0 && <option value="">لا يوجد طلاب مطابقين</option>}
+          {filteredStudents.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <input type="month" style={{maxWidth:170}} value={month} onChange={e=>setMonth(e.target.value)} />
         <button className="btn btn-ghost" style={{marginRight:'auto'}} onClick={()=>setShowBulk(!showBulk)}>{showBulk?'إخفاء':'إرسال جماعي لكل أولياء الأمور'}</button>
@@ -6089,11 +6112,11 @@ function ReportsTab({students,groups,teachers,attendance,grades,payments,groupBy
       {showBulk && (
         <div className="card no-print" style={{marginBottom:18}}>
           <div className="section-title">إرسال تقارير {monthLabel(month)} لكل أولياء الأمور</div>
-          <p className="small muted" style={{marginTop:-6,marginBottom:12}}>دوس "واتساب" جنب كل طالب — هيفتحلك واتساب برسالة جاهزة، وتدوس إرسال بنفسك.</p>
+          <p className="small muted" style={{marginTop:-6,marginBottom:12}}>دوس "واتساب" جنب كل طالب — هيفتحلك واتساب برسالة جاهزة، وتدوس إرسال بنفسك. استخدم قائمة المجموعة وخانة البحث فوق لو عاوز تسيّر على مجموعة أو طالب معين.</p>
           <table>
             <thead><tr><th>الطالب</th><th>المجموعة</th><th>هاتف ولي الأمر</th><th></th></tr></thead>
             <tbody>
-              {students.map(s=>{
+              {filteredStudents.map(s=>{
                 const st = computeStudentMonthStats(s, month, attendance, grades, payments, groupById);
                 const g = groupById(s.groupId);
                 const t = g ? teachers.find(x=>x.id===g.teacherId) : null;
