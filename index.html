@@ -151,6 +151,7 @@ tr:last-child td{border-bottom:none;}
 .badge-rose{background:var(--rose-bg); color:var(--rose);}
 .badge-gray{background:#f0ebe4; color:var(--muted);}
 .badge-purple{background:#efe6fb; color:#7c3aed;}
+.badge-blue{background:#e3f0fb; color:#1f6fb2;}
 input,select,textarea{
   font-family:inherit; border:1.5px solid var(--border); border-radius:9px; padding:9px 11px; font-size:13.5px;
   width:100%; background:#fff; color:var(--ink);
@@ -307,6 +308,8 @@ const LOGO = (size) => (
 const STAGES = ["روضة","ابتدائي 1","ابتدائي 2","ابتدائي 3","ابتدائي 4","ابتدائي 5","ابتدائي 6",
   "إعدادي 1","إعدادي 2","إعدادي 3","ثانوي 1","ثانوي 2","ثانوي 3"];
 
+const SECONDARY_STAGES = ["ثانوي 1","ثانوي 2","ثانوي 3"];
+
 const EDUCATION_TYPES = ["حكومي","لغات","تجريبي"];
 
 // A student expected monthly fee: their own override if set, otherwise the group fee.
@@ -458,7 +461,9 @@ function buildWhatsAppReportLink(student, month, stats, teacher){
   const hasHighlevel = stats.highlevelSessions && stats.highlevelSessions.length>0;
   lines.push(
     ``,
-    `📌 نسبة الحضور${hasHighlevel?' (الحصص العادية)':''}: ${stats.rate===null?'لا يوجد حصص مسجلة':stats.rate+'%'}`,
+    student.onlineOnly
+      ? `📌 الحضور: الابن/ة بيتابع أونلاين مع مستر محمد سامي — مفيش حضور في السنتر`
+      : `📌 نسبة الحضور${hasHighlevel?' (الحصص العادية)':''}: ${stats.rate===null?'لا يوجد حصص مسجلة':stats.rate+'%'}`,
   );
   if(stats.absentDates.length>0) lines.push(`❌ أيام الغياب: ${stats.absentDates.join('، ')}`);
   lines.push(`📝 متوسط درجات الامتحانات: ${stats.examsAvg===null?'لا يوجد اختبارات':stats.examsAvg+'%'}`);
@@ -823,7 +828,7 @@ function QuickActionsBar({students,groups,teachers,persistGroups,payments,persis
       {active==='student' && (
         <Modal title="إضافة طالب جديد" onClose={close}>
           <StudentForm
-            student={{id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],highLevelOnly:false,stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'}}
+            student={{id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],highLevelOnly:false,onlineOnly:false,stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'}}
             groups={groups}
             onCancel={close}
             onSave={(data)=>{ const {isNew, ...clean} = data; persistStudents([...students, clean]); close(); }}
@@ -2123,7 +2128,7 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
     return matchDeleted && matchQ && matchG;
   });
 
-  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],highLevelOnly:false,stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'});
+  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],highLevelOnly:false,onlineOnly:false,stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'});
 
   const save = async (data) => {
     const {isNew, ...clean} = data;
@@ -2212,7 +2217,7 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
                 const deleted = s.status==='deleted';
                 return (
                   <tr key={s.id} style={(frozen||deleted)?{opacity:0.6}:{}}>
-                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}{s.secondaryGroupId && <span className="badge badge-amber" style={{marginRight:6}} title="بيحضر معاد من مجموعة تانية كمان">مختلط</span>}{s.highLevelOnly && <span className="badge badge-purple" style={{marginRight:6}} title="طالب هاي ليفل بس — مواعيده الخاصة">هاي ليفل بس</span>}</td>
+                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}{s.secondaryGroupId && <span className="badge badge-amber" style={{marginRight:6}} title="بيحضر معاد من مجموعة تانية كمان">مختلط</span>}{s.highLevelOnly && <span className="badge badge-purple" style={{marginRight:6}} title="طالب هاي ليفل بس — مواعيده الخاصة">هاي ليفل بس</span>}{s.onlineOnly && <span className="badge badge-blue" style={{marginRight:6}} title="طالب أونلاين — ملوش حضور فالسنتر خالص">أونلاين</span>}</td>
                     <td>{g?g.name:<span className="muted">بدون مجموعة</span>}</td>
                     <td>{s.stage}</td>
                     <td><span style={{fontWeight:800,fontFamily:'monospace'}}>{studentCode(s.id)}</span></td>
@@ -2334,7 +2339,7 @@ function StudentForm({student,groups,onCancel,onSave}){
       {f.highLevelOnly && <div className="small muted" style={{marginTop:-8,marginBottom:12}}>هيظهر في روستر "حضور الهاي ليفل" حتى لو نوع تعليمه مش "لغات" أو "تجريبي"</div>}
       <div className="grid grid-2">
         <Field label="المرحلة الدراسية">
-          <select value={f.stage} onChange={e=>set('stage',e.target.value)}>
+          <select value={f.stage} onChange={e=>setF({...f, stage:e.target.value, onlineOnly: SECONDARY_STAGES.includes(e.target.value) ? f.onlineOnly : false})}>
             {STAGES.map(s=><option key={s} value={s}>{s}</option>)}
           </select>
         </Field>
@@ -2345,6 +2350,11 @@ function StudentForm({student,groups,onCancel,onSave}){
           </select>
         </Field>
       </div>
+      {SECONDARY_STAGES.includes(f.stage) && <div className="field" style={{display:'flex',alignItems:'center',gap:8}}>
+        <input type="checkbox" id="onlineOnly" checked={!!f.onlineOnly} onChange={e=>set('onlineOnly',e.target.checked)} style={{width:'auto'}} />
+        <label htmlFor="onlineOnly" style={{margin:0,cursor:'pointer'}}>طالب أونلاين بس (ملوش حضور في السنتر خالص — بيتابع الإنجليزي أونلاين مع مستر محمد سامي فقط)</label>
+      </div>}
+      {f.onlineOnly && <div className="small muted" style={{marginTop:-8,marginBottom:12}}>هيتشال من روستر الحضور العادي في السنتر عشان متتحسبش عليه حصص غياب — بياناته في الاشتراك والدرجات والسداد تفضل زي أي طالب تاني</div>}
       <Field label="مجموعة إضافية (لو بيحضر معاد من مجموعة تانية بسبب ضيق مواعيده)">
         <select value={f.secondaryGroupId||''} onChange={e=>set('secondaryGroupId',e.target.value)}>
           <option value="">بدون — يحضر مجموعته الأساسية بس</option>
@@ -2858,9 +2868,13 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   // their own special timing, with no normal day-to-day attendance at all) — independent of
   // the group's fixed schedule days either way.
   const fullRoster = attendanceRosterForGroup(groupId);
+  // onlineOnly students (secondary-stage, English-only, no physical presence at the center at
+  // all — e.g. a student who follows Mr. Samy's lessons entirely online) never belong in the
+  // regular in-center attendance roster, so they're never marked absent for a session they were
+  // never expected to attend. They stay fully visible everywhere else (grades, payments, roster counts).
   const roster = mode==='highlevel'
     ? fullRoster.filter(s=> (s.educationType==='لغات' || s.educationType==='تجريبي' || s.highLevelOnly) && teacher && teacher.isOwner)
-    : fullRoster;
+    : fullRoster.filter(s=>!s.onlineOnly);
 
   const existing = attendance.find(a=>a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode);
   const [records,setRecords] = useState(existing?existing.records:{});
