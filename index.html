@@ -392,14 +392,18 @@ const normalizeEgyptPhone = (phone) => {
 
 function computeStudentMonthStats(student, month, attendance, grades, payments, groupById){
   const group = groupById(student.groupId);
+  // A mixed-schedule student (secondaryGroupId set — they attend one day from each of the
+  // stage's two groups) has sessions/exams recorded under EITHER groupId, so every lookup
+  // below matches both instead of only their official primary group.
+  const isTheirGroup = (gid) => gid===student.groupId || (student.secondaryGroupId && gid===student.secondaryGroupId);
   // Regular attendance rate/sessions: only "regular" sessions, excluding anything flagged
   // "cancelled" (a flexible/optional session the admin called off that day — see the ⛔ toggle
   // in AttendanceTab) so a cancelled occurrence never counts as, or costs, an absence.
-  const monthAttendance = attendance.filter(a=>a.groupId===student.groupId && a.date.startsWith(month) && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (student.id in a.records)).sort((a,b)=>a.date.localeCompare(b.date));
+  const monthAttendance = attendance.filter(a=>isTheirGroup(a.groupId) && a.date.startsWith(month) && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (student.id in a.records)).sort((a,b)=>a.date.localeCompare(b.date));
   const presentCount = monthAttendance.filter(a=>attStatus(a.records[student.id])==='present').length;
   const absentDates = monthAttendance.filter(a=>attStatus(a.records[student.id])==='absent').map(a=>a.date);
   const rate = monthAttendance.length ? Math.round((presentCount/monthAttendance.length)*100) : null;
-  const monthExams = grades.filter(g=>g.groupId===student.groupId && g.date.startsWith(month));
+  const monthExams = grades.filter(g=>isTheirGroup(g.groupId) && g.date.startsWith(month));
   const examsAvg = monthExams.length ? Math.round(monthExams.reduce((s,e)=>s+((e.scores?.[student.id]||0)/(e.maxScore||1))*100,0)/monthExams.length) : null;
   const paymentRec = payments.find(p=>p.studentId===student.id && p.month===month);
   const paid = !!(paymentRec && paymentRec.paid);
@@ -427,7 +431,7 @@ function computeStudentMonthStats(student, month, attendance, grades, payments, 
   // High-Level (extra-curriculum) sessions: a completely separate list — movable, not tied to
   // the student's normal schedule — shown in the report with full date/day-name/time instead of
   // being mixed into the regular attendance rate above.
-  const monthHighlevel = attendance.filter(a=>a.groupId===student.groupId && a.date.startsWith(month) && a.sessionType==='highlevel' && a.records && (student.id in a.records)).sort((a,b)=>a.date.localeCompare(b.date));
+  const monthHighlevel = attendance.filter(a=>isTheirGroup(a.groupId) && a.date.startsWith(month) && a.sessionType==='highlevel' && a.records && (student.id in a.records)).sort((a,b)=>a.date.localeCompare(b.date));
   const highlevelSessions = monthHighlevel.map(a=>{
     const rec = a.records[student.id];
     const [y,mo,da] = a.date.split('-').map(Number);
@@ -499,7 +503,7 @@ function buildWhatsAppReportLink(student, month, stats, teacher){
 // (stops counting at the first "present" found going backwards from today).
 function consecutiveAbsences(student, attendance){
   const recs = attendance
-    .filter(a=> a.groupId===student.groupId && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (student.id in a.records))
+    .filter(a=> (a.groupId===student.groupId || (student.secondaryGroupId && a.groupId===student.secondaryGroupId)) && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (student.id in a.records))
     .sort((a,b)=> b.date.localeCompare(a.date));
   let streak = 0;
   for(const r of recs){
@@ -814,7 +818,7 @@ function QuickActionsBar({students,groups,teachers,persistGroups,payments,persis
       {active==='student' && (
         <Modal title="إضافة طالب جديد" onClose={close}>
           <StudentForm
-            student={{id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'}}
+            student={{id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'}}
             groups={groups}
             onCancel={close}
             onSave={(data)=>{ const {isNew, ...clean} = data; persistStudents([...students, clean]); close(); }}
@@ -860,6 +864,7 @@ function NextSessionPrepPanel({groups,teachers,persistGroups,onDone}){
   const [homework,setHomework] = useState(group?.nextHomework||'');
   const [recType,setRecType] = useState(group?.nextRecitationType||'recitation');
   const [recText,setRecText] = useState(group?.nextRecitationText||'');
+  const [showHistory,setShowHistory] = useState(false);
 
   const selectGroup = (id) => {
     setGroupId(id);
@@ -869,17 +874,26 @@ function NextSessionPrepPanel({groups,teachers,persistGroups,onDone}){
     setRecText(g?.nextRecitationText||'');
   };
 
+  // Every save is now ALSO appended (not overwritten) to `prepHistory` on the group doc, so
+  // past sessions' homework/recitation/exam content stays browsable by date/time instead of
+  // being silently replaced each time — see the "سجل التجهيزات السابقة" toggle below.
+  // Capped at the most recent 60 entries so the group doc doesn't grow unbounded.
   const save = () => {
     if(!group){ alert('اختر مجموعة'); return; }
+    const now = new Date().toISOString();
+    const entry = {date:todayISO(), at:now, homework, recitationType:recType, recitationText:recText, updatedBy:'مستر محمد سامي'};
     persistGroups(groups.map(g=>g.id===group.id?{
       ...g, nextHomework:homework, nextRecitationType:recType, nextRecitationText:recText,
-      nextPrepUpdatedAt:new Date().toISOString(), nextPrepUpdatedBy:'مستر محمد سامي',
+      nextPrepUpdatedAt:now, nextPrepUpdatedBy:'مستر محمد سامي',
+      prepHistory: [...(g.prepHistory||[]), entry].slice(-60),
     }:g));
     onDone();
   };
 
   if(!owner) return <div className="muted small">معرفش أحدد مدرس صاحب الأكاديمية — تأكد من بيانات المدرسين.</div>;
   if(ownerGroups.length===0) return <div className="muted small">معرفش مجموعات مسجلة لمستر محمد سامي.</div>;
+
+  const history = group && group.prepHistory ? [...group.prepHistory].reverse() : [];
 
   return (
     <div>
@@ -916,6 +930,30 @@ function NextSessionPrepPanel({groups,teachers,persistGroups,onDone}){
         <button className="btn btn-primary" onClick={save}>حفظ — هيظهر كتذكير يوم الحصة الجايه</button>
         <button className="btn btn-ghost" onClick={onDone}>إلغاء</button>
       </div>
+
+      {group && (
+        <div style={{marginTop:14}}>
+          <button className="link-btn" onClick={()=>setShowHistory(!showHistory)}>{showHistory?'إخفاء':'عرض'} سجل التجهيزات السابقة لـ{group.name} ({history.length})</button>
+          {showHistory && (
+            history.length===0 ? <div className="muted small" style={{marginTop:8}}>لسه مفيش تجهيزات مسجلة لهذه المجموعة.</div> : (
+              <div className="card" style={{marginTop:10,maxHeight:260,overflowY:'auto'}}>
+                <table>
+                  <thead><tr><th>التاريخ/الوقت</th><th>الواجب</th><th>تسميع/امتحان</th></tr></thead>
+                  <tbody>
+                    {history.map((h,i)=>(
+                      <tr key={i}>
+                        <td className="small muted">{h.date} — {new Date(h.at).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})}</td>
+                        <td className="small">{h.homework||'—'}</td>
+                        <td className="small">{h.recitationType==='exam'?'📝 ':'🗣️ '}{h.recitationText||'—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1423,7 +1461,7 @@ function App(){
         const t = teachersRef.current.find(x=>x.id===g.teacherId);
         return t && t.isOwner;
       }).map(g=>g.id));
-      const pending = studentsRef.current.filter(s=>!s.platformCode && s.status!=='frozen' && ownerGroupIds.has(s.groupId));
+      const pending = studentsRef.current.filter(s=>!s.platformCode && s.status!=='frozen' && s.status!=='deleted' && ownerGroupIds.has(s.groupId));
       for(const st of pending){
         try{ await reservePlatformCodeForStudent(st); }
         catch(err){ console.warn('Platform code auto-assign:', st.name, err.message||err); }
@@ -1434,8 +1472,19 @@ function App(){
   const groupById = useCallback((id)=> groups.find(g=>g.id===id), [groups]);
   const teacherById = useCallback((id)=> teachers.find(t=>t.id===id), [teachers]);
   // Frozen students ("تجميد") stay in the system with all their history, but are hidden from
-  // rosters (attendance/grades) and group capacity counts until unfrozen.
-  const studentsInGroup = useCallback((gid)=> students.filter(s=>s.groupId===gid && s.status!=='frozen'), [students]);
+  // rosters (attendance/grades) and group capacity counts until unfrozen. Deleted ("حذف") is
+  // similar but permanent: the student doc itself is never removed (see `remove` in
+  // StudentsTab) — only flagged status:'deleted' — so every past attendance/payment/grade
+  // record they're tied to stays fully intact and reachable (reports, old receipts, old-month
+  // accounting), while they disappear from capacity counts, new rosters, and future dues.
+  const studentsInGroup = useCallback((gid)=> students.filter(s=>s.groupId===gid && s.status!=='frozen' && s.status!=='deleted'), [students]);
+  // Same as studentsInGroup but ALSO includes a student whose `secondaryGroupId` (set on their
+  // record when their actual attendance days don't match their official group — e.g. they're
+  // enrolled in the Sat/Tue group but personally attend Sat + the OTHER group's Thursday
+  // because of a scheduling clash elsewhere) points at this group. Used only where we're
+  // actually taking attendance/grades for a specific calendar session — NOT for capacity counts
+  // or per-teacher student totals, which must stay primary-group-only to avoid double counting.
+  const attendanceRosterForGroup = useCallback((gid)=> students.filter(s=>(s.groupId===gid || s.secondaryGroupId===gid) && s.status!=='frozen' && s.status!=='deleted'), [students]);
 
   // payment status helper for a student in a given month
   const paymentFor = (studentId, mk) => payments.find(p=>p.studentId===studentId && p.month===mk);
@@ -1444,7 +1493,7 @@ function App(){
   const currentMonth = monthKey();
   const overdueStudents = useMemo(()=>{
     return students.filter(s=>{
-      if(!s.groupId) return false;
+      if(!s.groupId || s.status==='deleted') return false;
       return !isPaid(s.id, currentMonth);
     });
   },[students,payments,currentMonth]);
@@ -1667,7 +1716,7 @@ function App(){
         {tab==='dashboard' && <Dashboard {...{students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab,isAdmin}} />}
         {tab==='students' && <StudentsTab {...{students,groups,teachers,persistStudents,payments,currentMonth,groupById,attendance,isAdmin,actorRef}} />}
         {tab==='groups' && <GroupsAndTeachersTab {...{groups,teachers,persistGroups,persistTeachers,studentsInGroup,isAdmin,actorRef,students,attendance,grades,payments,groupById,currentMonth,setTab,renters,persistRenters,renterPayments,persistRenterPayments}} />}
-        {tab==='followup' && <FollowupTab {...{groups,students,attendance,persistAttendance,studentsInGroup,teachers,groupById,payments,persistStudents,grades,persistGrades,isAdmin}} />}
+        {tab==='followup' && <FollowupTab {...{groups,students,attendance,persistAttendance,studentsInGroup,attendanceRosterForGroup,teachers,groupById,payments,persistStudents,grades,persistGrades,isAdmin}} />}
         {tab==='private' && <PrivateLessonsTab {...{teachers,privateLessons,persistPrivateLessons,isAdmin,actorRef}} />}
         {tab==='trash' && <TrashTab {...{isAdmin}} />}
         {tab==='secretaryActivity' && isAdmin && <SecretaryActivityReportTab />}
@@ -1881,7 +1930,7 @@ function SecretaryActivityReportTab(){
 function Dashboard({students,groups,teachers,attendance,payments,overdueStudents,todayAttendanceRate,monthRevenue,monthPending,currentMonth,groupById,setTab,isAdmin}){
   const frequentAbsentees = useMemo(()=>{
     return students
-      .filter(s=>s.groupId)
+      .filter(s=>s.groupId && s.status!=='deleted')
       .map(s=>({student:s, streak: consecutiveAbsences(s, attendance)}))
       .filter(x=>x.streak>=3)
       .sort((a,b)=>b.streak-a.streak);
@@ -2059,14 +2108,17 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
   const [filterGroup,setFilterGroup] = useState('all');
   const [editing,setEditing] = useState(null); // student obj or 'new'
   const [absenceFor,setAbsenceFor] = useState(null); // student obj or null
+  const [showDeleted,setShowDeleted] = useState(false); // false = active roster (default), true = the removed/"محذوف" list only
+  const deletedCount = students.filter(s=>s.status==='deleted').length;
 
   const filtered = students.filter(s=>{
+    const matchDeleted = showDeleted ? s.status==='deleted' : s.status!=='deleted';
     const matchQ = s.name.toLowerCase().includes(query.toLowerCase()) || (s.phone||'').includes(query) || (s.parentPhone||'').includes(query) || studentCode(s.id).toLowerCase().includes(query.toLowerCase()) || (s.platformCode||'').toLowerCase().includes(query.toLowerCase());
     const matchG = filterGroup==='all' || s.groupId===filterGroup;
-    return matchQ && matchG;
+    return matchDeleted && matchQ && matchG;
   });
 
-  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'});
+  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'});
 
   const save = async (data) => {
     const {isNew, ...clean} = data;
@@ -2088,10 +2140,26 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
       catch(err){ console.warn(err); alert('تم حفظ الطالب، لكن تعذر تخصيص كود المنصة تلقائياً: '+(err.message||'')); }
     }
   };
+  // Soft-delete: the student doc is NEVER removed from Firestore (unlike other entities, which
+  // go through `removeWithTrash` into a 2-month-expiring trash). We just flag status:'deleted'
+  // + deletedAt, so every attendance/grade/payment record already tied to their id stays fully
+  // intact and reachable forever (ReportsTab, old receipts, past-month accounting) — they only
+  // disappear from capacity counts, new attendance rosters, and dues from the NEXT month on
+  // (see PaymentsTab's `list`, which keeps showing them for any month up to `deletedAt`).
   const remove = (student) => {
-    if(confirm(`تأكيد نقل "${student.name}" لسلة المحذوفات؟ تقدر تسترجعه خلال شهرين من تبويب "سلة المحذوفات".`)){
-      removeWithTrash('students', student, students, persistStudents, actorRef.current);
+    if(confirm(`تأكيد حذف "${student.name}"؟ هيختفي من كشوف الحضور والمصروفات بداية من الشهر الجاي، لكن كل سجلاته القديمة (حضور/درجات/مدفوعات) هتفضل محفوظة بالكامل في النظام، وتقدر تسترجعه في أي وقت من فلتر "المحذوفين" تحت.`)){
+      persistStudents(students.map(s=>s.id===student.id?{...s, status:'deleted', deletedAt:todayISO(), deletedBy: isAdmin?'مستر محمد سامي':'السكرتيرة'}:s));
     }
+  };
+  const restoreStudent = (student) => {
+    if(!confirm(`استرجاع "${student.name}" لقائمة الطلاب النشطين؟`)) return;
+    persistStudents(students.map(s=>s.id===student.id?{...s, status:'active', deletedAt:null, deletedBy:null}:s));
+  };
+  // True permanent erase (the OLD behavior) — kept as a separate, rarely-needed action for a
+  // deleted student only, since soft-delete above is now the normal "حذف" flow.
+  const permanentlyDelete = (student) => {
+    if(!confirm(`حذف "${student.name}" نهائياً؟ ده غير اللي فوق — ده بيمسح الطالب فعليًا (بينقله لسلة المحذوفات وبيتمسح تمامًا خلال شهرين). كل سجلاته القديمة هتفضل في الحضور/الدرجات/المدفوعات بس من غير اسمه مربوط بيها بوضوح. متأكد؟`)) return;
+    removeWithTrash('students', student, students, persistStudents, actorRef.current);
   };
   const toggleFreeze = (student) => {
     const willFreeze = student.status!=='frozen';
@@ -2102,7 +2170,7 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
   const attendanceRate = (studentId) => {
     const recs = attendance.filter(a=>{
       const st = students.find(x=>x.id===studentId);
-      return st && a.groupId===st.groupId && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (studentId in a.records);
+      return st && (a.groupId===st.groupId || (st.secondaryGroupId && a.groupId===st.secondaryGroupId)) && (a.sessionType||'regular')==='regular' && !a.cancelled && a.records && (studentId in a.records);
     });
     if(recs.length===0) return null;
     const present = recs.filter(r=>attStatus(r.records[studentId])==='present').length;
@@ -2112,7 +2180,7 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
   return (
     <div>
       <div className="topbar">
-        <div><h1>الطلاب</h1><div className="date">{students.length} طالب مسجل</div></div>
+        <div><h1>الطلاب</h1><div className="date">{students.filter(s=>s.status!=='deleted').length} طالب مسجل{deletedCount>0?` · ${deletedCount} محذوف`:''}</div></div>
         <button className="btn btn-primary" onClick={openNew}>+ إضافة طالب جديد</button>
       </div>
 
@@ -2122,10 +2190,11 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
           <span className={"chip "+(filterGroup==='all'?'active':'')} onClick={()=>setFilterGroup('all')}>الكل</span>
           {groups.map(g=><span key={g.id} className={"chip "+(filterGroup===g.id?'active':'')} onClick={()=>setFilterGroup(g.id)}>{g.name}</span>)}
         </div>
+        {deletedCount>0 && <span className={"chip "+(showDeleted?'active':'')} onClick={()=>setShowDeleted(!showDeleted)} style={{marginRight:'auto'}}>🗑 المحذوفين ({deletedCount})</span>}
       </div>
 
       <div className="card">
-        {filtered.length===0 ? <Empty icon="👤" text="لا يوجد طلاب مطابقين — أضف طالب جديد من الأعلى" /> : (
+        {filtered.length===0 ? <Empty icon="👤" text={showDeleted?'لا يوجد طلاب محذوفين':'لا يوجد طلاب مطابقين — أضف طالب جديد من الأعلى'} /> : (
           <table>
             <thead><tr><th>الطالب</th><th>المجموعة</th><th>المستوى</th><th>كود الحضور</th><th>هاتف الطالب</th><th>هاتف ولي الأمر</th><th>كود المنصة</th><th>نسبة الحضور</th><th>سداد {monthLabel(currentMonth)}</th><th>الحالة</th><th></th></tr></thead>
             <tbody>
@@ -2135,9 +2204,10 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
                 const rate = attendanceRate(s.id);
                 const paid = payments.some(p=>p.studentId===s.id && p.month===currentMonth && p.paid);
                 const frozen = s.status==='frozen';
+                const deleted = s.status==='deleted';
                 return (
-                  <tr key={s.id} style={frozen?{opacity:0.6}:{}}>
-                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
+                  <tr key={s.id} style={(frozen||deleted)?{opacity:0.6}:{}}>
+                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}{s.secondaryGroupId && <span className="badge badge-amber" style={{marginRight:6}} title="بيحضر معاد من مجموعة تانية كمان">مختلط</span>}</td>
                     <td>{g?g.name:<span className="muted">بدون مجموعة</span>}</td>
                     <td>{s.stage}</td>
                     <td><span style={{fontWeight:800,fontFamily:'monospace'}}>{studentCode(s.id)}</span></td>
@@ -2146,14 +2216,23 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
                     <td>{t && t.isOwner ? (s.platformCode?<span className="badge badge-green" style={{fontFamily:'monospace'}}>{s.platformCode}</span>:<span className="badge badge-amber">بانتظار التخصيص</span>) : <span className="small muted">لا يوجد — المدرس بدون منصة</span>}</td>
                     <td>{rate===null?<span className="muted">—</span>:<span className={"badge "+(rate>=80?'badge-green':rate>=50?'badge-amber':'badge-rose')}>{rate}%</span>}</td>
                     <td>{paid?<span className="badge badge-green">تم السداد</span>:<span className="badge badge-rose">متأخر</span>}</td>
-                    <td>{frozen?<span className="badge badge-gray">🧊 مجمّد</span>:<span className="badge badge-green">نشط</span>}</td>
+                    <td>{deleted?<span className="badge badge-gray">🗑 محذوف{s.deletedAt?' — '+s.deletedAt:''}</span>:frozen?<span className="badge badge-gray">🧊 مجمّد</span>:<span className="badge badge-green">نشط</span>}</td>
                     <td>
                       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                        <button className="btn btn-ghost btn-sm" onClick={()=>setEditing(s)}>تعديل</button>
-                        <button className="btn btn-ghost btn-sm" onClick={()=>toggleFreeze(s)}>{frozen?'▶ إلغاء التجميد':'🧊 تجميد'}</button>
-                        <button className="btn btn-ghost btn-sm" onClick={()=>setAbsenceFor(s)}>📤 رسالة غياب</button>
-                        {t && t.isOwner && buildPlatformWhatsAppLink(s) && <a className="btn btn-ghost btn-sm" href={buildPlatformWhatsAppLink(s)} target="_blank" rel="noopener noreferrer">📱 كود المنصة</a>}
-                        {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(s)}>حذف</button>}
+                        {deleted ? (
+                          isAdmin && <React.Fragment>
+                            <button className="btn btn-primary btn-sm" onClick={()=>restoreStudent(s)}>↩ استرجاع</button>
+                            <button className="btn btn-danger btn-sm" onClick={()=>permanentlyDelete(s)}>🗑 حذف نهائي</button>
+                          </React.Fragment>
+                        ) : (
+                          <React.Fragment>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>setEditing(s)}>تعديل</button>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>toggleFreeze(s)}>{frozen?'▶ إلغاء التجميد':'🧊 تجميد'}</button>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>setAbsenceFor(s)}>📤 رسالة غياب</button>
+                            {t && t.isOwner && buildPlatformWhatsAppLink(s) && <a className="btn btn-ghost btn-sm" href={buildPlatformWhatsAppLink(s)} target="_blank" rel="noopener noreferrer">📱 كود المنصة</a>}
+                            {isAdmin && <button className="btn btn-danger btn-sm" onClick={()=>remove(s)}>حذف</button>}
+                          </React.Fragment>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -2256,6 +2335,13 @@ function StudentForm({student,groups,onCancel,onSave}){
           </select>
         </Field>
       </div>
+      <Field label="مجموعة إضافية (لو بيحضر معاد من مجموعة تانية بسبب ضيق مواعيده)">
+        <select value={f.secondaryGroupId||''} onChange={e=>set('secondaryGroupId',e.target.value)}>
+          <option value="">بدون — يحضر مجموعته الأساسية بس</option>
+          {groups.filter(g=>g.id!==f.groupId).map(g=><option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+        <div className="small muted" style={{marginTop:4}}>الاشتراك والسداد بيفضلوا على المجموعة الأساسية بس — ده بس عشان تقدر تسجل له حضور ودرجات في المجموعة التانية كمان لو حضر معادها</div>
+      </Field>
       <Field label={`الاشتراك الشهري لهذا الطالب (ج.م) — سيب فاضي لاستخدام سعر المجموعة${group?' ('+fmtMoney(group.fee)+')':''}`}>
         <input type="number" value={f.feeOverride} onChange={e=>set('feeOverride',e.target.value)} placeholder={group?String(group.fee):'0'} />
       </Field>
@@ -2723,7 +2809,7 @@ function FollowupTab(props){
   );
 }
 
-function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup,teachers,groupById,isAdmin}){
+function AttendanceTab({groups,students,attendance,persistAttendance,studentsInGroup,attendanceRosterForGroup,teachers,groupById,isAdmin}){
   const [mode,setMode] = useState('regular'); // 'regular' | 'highlevel'
   const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
   const [date,setDate] = useState(todayISO());
@@ -2753,10 +2839,13 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   const group = groupById(groupId);
   const teacher = group ? teachers.find(t=>t.id===group.teacherId) : null;
 
-  // Regular roster = normal active students in the group. High-Level roster = only Mr. Mohamed
-  // Samy's (the owner's) own لغات/تجريبي students — they're the ones with the extra curriculum
-  // and the movable extra sessions for it — independent of the group's fixed schedule days.
-  const fullRoster = studentsInGroup(groupId);
+  // Regular roster = normal active students in the group, PLUS any student whose
+  // `secondaryGroupId` points here (a mixed-schedule student who actually attends this group's
+  // day even though they're officially enrolled in the other group of the same stage — see
+  // `attendanceRosterForGroup`). High-Level roster = only Mr. Mohamed Samy's (the owner's) own
+  // لغات/تجريبي students — they're the ones with the extra curriculum and the movable extra
+  // sessions for it — independent of the group's fixed schedule days.
+  const fullRoster = attendanceRosterForGroup(groupId);
   const roster = mode==='highlevel'
     ? fullRoster.filter(s=> (s.educationType==='لغات' || s.educationType==='تجريبي') && teacher && teacher.isOwner)
     : fullRoster;
@@ -2925,7 +3014,7 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
                              : null;
                 return (
                   <tr key={s.id}>
-                    <td style={{fontWeight:800}}>{s.name}</td>
+                    <td style={{fontWeight:800}}>{s.name}{s.secondaryGroupId===groupId && <span className="badge badge-amber" style={{marginRight:6,fontWeight:700}} title="أصلاً مسجل في مجموعة تانية، بس بيحضر هنا كمان">مختلط</span>}</td>
                     <td>
                       <button className={"att-toggle "+(st==='present'?'present':st==='absent'?'absent':'')} onClick={()=>toggle(s.id)}>
                         {st==='present'?'حاضر ✓':st==='absent'?'غائب ✕':'—'}
@@ -2980,12 +3069,14 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   );
 }
 
-function GradesTab({groups,students,grades,persistGrades,studentsInGroup,isAdmin}){
+function GradesTab({groups,students,grades,persistGrades,studentsInGroup,attendanceRosterForGroup,isAdmin}){
   const [groupId,setGroupId] = useState(groups[0]?groups[0].id:'');
   const [creating,setCreating] = useState(null);
 
   useEffect(()=>{ if(!groupId && groups[0]) setGroupId(groups[0].id); },[groups]);
-  const roster = studentsInGroup(groupId);
+  // Includes mixed-schedule students (secondaryGroupId) same as AttendanceTab, so a student
+  // who actually sits this group's exam can be graded here even if enrolled in the other group.
+  const roster = attendanceRosterForGroup(groupId);
   const groupExams = grades.filter(g=>g.groupId===groupId).sort((a,b)=>b.date.localeCompare(a.date));
 
   const openNew = () => setCreating({id:null, groupId, name:'', date:todayISO(), maxScore:20, scores:{}});
@@ -3277,11 +3368,16 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
   const [financeFor,setFinanceFor] = useState(null); // student obj or null (full financial detail modal)
   const [notebookPayFor,setNotebookPayFor] = useState(null); // student obj or null (notebook partial-payment entry)
 
+  // A deleted student disappears from THIS month onward (no more chasing/charging), but stays
+  // visible when looking at a month they were still active in — so old receipts/payment history
+  // for them are never lost, only their future dues stop being tracked. `deletedAt` is the date
+  // they were removed; any month up to and including that one still shows them.
   const list = students.filter(s=>{
+    const matchDeleted = s.status!=='deleted' || (s.deletedAt && month<=s.deletedAt.slice(0,7));
     const matchG = filterGroup==='all'||s.groupId===filterGroup;
     const q = query.trim().toLowerCase();
     const matchQ = !q || s.name.toLowerCase().includes(q) || studentCode(s.id).toLowerCase().includes(q) || (s.phone||'').includes(q);
-    return matchG && matchQ;
+    return matchDeleted && matchG && matchQ;
   });
 
   const recordFor = (sid, forMonth) => payments.find(p=>p.studentId===sid && p.month===(forMonth||month));
@@ -3425,8 +3521,8 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
                 const reminderLink = buildFullReminderWaLink(s, teacher, g, payments, owner);
                 const confirmLink = buildMonthConfirmWaLink(s, teacher, g, payments, owner, month);
                 return (
-                  <tr key={s.id}>
-                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}</td>
+                  <tr key={s.id} style={s.status==='deleted'?{opacity:0.65}:{}}>
+                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}{s.status==='deleted' && <span className="badge badge-gray" style={{marginRight:6}}>🗑 محذوف</span>}</td>
                     <td>{g?g.name:'—'}</td>
                     <td>{fmtMoney(norm.amountDue)}</td>
                     <td style={{color:'var(--green)',fontWeight:700}}>{fmtMoney(norm.amountPaid)}</td>
@@ -3442,7 +3538,7 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
                     </td>
                     <td>
                       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                        {remaining>0 && <button className="btn btn-primary btn-sm" onClick={()=>setPayingFor(s)}>تسجيل سداد</button>}
+                        {remaining>0 && s.status!=='deleted' && <button className="btn btn-primary btn-sm" onClick={()=>setPayingFor(s)}>تسجيل سداد</button>}
                         {isAdmin && norm.amountPaid>0 && <button className="btn btn-ghost btn-sm" onClick={()=>cancelPayment(s)}>إلغاء</button>}
                         {/* الثلاث أيقونات الخاصة بالدفع: طباعة / تذكير واتساب / تأكيد واتساب */}
                         <button className="btn btn-ghost btn-sm" onClick={()=>printReceipt(s)} disabled={norm.amountPaid<=0} title="طباعة إيصال">🖶</button>
@@ -4483,7 +4579,7 @@ function TeacherProfileTab({teachers,groups,students,attendance,grades,payments,
   const teacher = teachers.find(t=>t.id===teacherId);
   const myGroups = groups.filter(g=>g.teacherId===teacherId);
   const myGroupIds = new Set(myGroups.map(g=>g.id));
-  const myStudents = students.filter(s=>myGroupIds.has(s.groupId));
+  const myStudents = students.filter(s=>myGroupIds.has(s.groupId) && s.status!=='deleted');
 
   const saveGroup = (data) => {
     if(data.id) persistGroups(groups.map(g=>g.id===data.id?data:g));
@@ -4532,7 +4628,7 @@ function TeacherProfileTab({teachers,groups,students,attendance,grades,payments,
                   <tr key={g.id}>
                     <td style={{fontWeight:800}}>{g.name}</td>
                     <td className="small">{g.schedule||'—'}</td>
-                    <td>{students.filter(s=>s.groupId===g.id && s.status!=='frozen').length} / {g.capacity}</td>
+                    <td>{students.filter(s=>s.groupId===g.id && s.status!=='frozen' && s.status!=='deleted').length} / {g.capacity}</td>
                     <td>{fmtMoney(g.fee)}</td>
                     <td>{g.commissionPercent ?? 70}%</td>
                     <td>{isAdmin && <button className="btn btn-ghost btn-sm" onClick={()=>setEditingGroup(g)}>تعديل</button>}</td>
@@ -4743,7 +4839,7 @@ function TrashTab({isAdmin}){
 function buildTeacherPaymentReportText(teacher, groups, students, payments, month){
   const myGroups = groups.filter(g=>g.teacherId===teacher.id);
   const myGroupIds = new Set(myGroups.map(g=>g.id));
-  const myStudents = students.filter(s=>myGroupIds.has(s.groupId));
+  const myStudents = students.filter(s=>myGroupIds.has(s.groupId) && s.status!=='deleted');
 
   // Matches groupRevenue() in AccountingTab: any amount actually paid counts toward the
   // teacher's share right away, including a partial payment — not only once fully settled.
