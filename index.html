@@ -842,7 +842,7 @@ function QuickActionsBar({students,groups,teachers,persistGroups,payments,persis
       )}
       {active==='attendance' && (
         <Modal title="تسجيل حضور/غياب سريع" onClose={close}>
-          <QuickAttendancePanel students={students} groupById={groupById} attendance={attendance} persistAttendance={persistAttendance} onDone={close} />
+          <QuickAttendancePanel students={students} teachers={teachers} groupById={groupById} attendance={attendance} persistAttendance={persistAttendance} onDone={close} />
         </Modal>
       )}
       {active==='prep' && isAdmin && (
@@ -1136,20 +1136,32 @@ function QuickGradePanel({students,groups,grades,persistGrades,onDone}){
   );
 }
 
-function QuickAttendancePanel({students,groupById,attendance,persistAttendance,onDone}){
+function QuickAttendancePanel({students,teachers,groupById,attendance,persistAttendance,onDone}){
   const [query,setQuery] = useState('');
   const [selected,setSelected] = useState(null);
+  const [mode,setMode] = useState('regular'); // 'regular' | 'highlevel' — which session this mark belongs to
   const matches = studentSearchMatches(students, query);
   const date = todayISO();
   const g = selected ? groupById(selected.groupId) : null;
-  // Scoped to the regular session only — otherwise this could silently match/overwrite a
-  // same-day High-Level or cancelled-occurrence doc for the same group (different sessionType).
-  const rec = selected ? attendance.find(a=>a.groupId===selected.groupId && a.date===date && (a.sessionType||'regular')==='regular') : null;
+  const teacher = g ? teachers.find(t=>t.id===g.teacherId) : null;
+  // Same eligibility rule as AttendanceTab's 🌟 roster: Mr. Samy's (owner) لغات/تجريبي
+  // students, plus anyone individually flagged highLevelOnly.
+  const highlevelEligible = !!(selected && teacher && teacher.isOwner && (selected.educationType==='لغات' || selected.educationType==='تجريبي' || selected.highLevelOnly));
+
+  useEffect(()=>{ setMode('regular'); },[selected]);
+
+  // Scoped to the CURRENTLY PICKED mode only — otherwise this could silently match/overwrite a
+  // same-day High-Level/regular/cancelled-occurrence doc for the same group (different sessionType).
+  // This is the exact bug that used to swallow High-Level marks: this quick panel always wrote
+  // sessionType:'regular' with no way to pick 'highlevel', so a dual-curriculum student marked
+  // here for their High-Level session silently landed in their REGULAR attendance instead, and
+  // their monthly report's "🌟 حصص الهاي ليفل" section stayed empty forever.
+  const rec = selected ? attendance.find(a=>a.groupId===selected.groupId && a.date===date && (a.sessionType||'regular')===mode) : null;
   const currentStatus = rec && rec.records ? rec.records[selected?.id] : undefined;
 
   const mark = (status) => {
-    const others = attendance.filter(a=>!(a.groupId===selected.groupId && a.date===date && (a.sessionType||'regular')==='regular'));
-    const base = rec ? {...rec} : {id:uid(), groupId:selected.groupId, date, records:{}, sessionType:'regular'};
+    const others = attendance.filter(a=>!(a.groupId===selected.groupId && a.date===date && (a.sessionType||'regular')===mode));
+    const base = rec ? {...rec} : {id:uid(), groupId:selected.groupId, date, records:{}, sessionType:mode};
     base.records = {...base.records, [selected.id]:status};
     persistAttendance([...others, base]);
     onDone();
@@ -1173,10 +1185,16 @@ function QuickAttendancePanel({students,groupById,attendance,persistAttendance,o
         <div className="card" style={{marginBottom:14}}>
           <div style={{fontWeight:900,fontSize:15}}>{selected.name}</div>
           <div className="small muted" style={{marginTop:2}}>{g?g.name:'بدون مجموعة'} — النهاردة</div>
+          {highlevelEligible && (
+            <div className="tag-row" style={{marginTop:10}}>
+              <span className={"chip "+(mode==='regular'?'active':'')} onClick={()=>setMode('regular')}>حضور عادي</span>
+              <span className={"chip "+(mode==='highlevel'?'active':'')} onClick={()=>setMode('highlevel')}>🌟 حضور هاي ليفل</span>
+            </div>
+          )}
           <div style={{marginTop:6}}>
-            {currentStatus==='present' && <span className="badge badge-green">مسجّل حاضر</span>}
-            {currentStatus==='absent' && <span className="badge badge-rose">مسجّل غائب</span>}
-            {!currentStatus && <span className="badge badge-gray">لسه مش مسجل</span>}
+            {currentStatus==='present' && <span className="badge badge-green">مسجّل حاضر{mode==='highlevel'?' (هاي ليفل)':''}</span>}
+            {currentStatus==='absent' && <span className="badge badge-rose">مسجّل غائب{mode==='highlevel'?' (هاي ليفل)':''}</span>}
+            {!currentStatus && <span className="badge badge-gray">لسه مش مسجل{mode==='highlevel'?' (هاي ليفل)':''}</span>}
           </div>
         </div>
       )}
@@ -1528,6 +1546,7 @@ function App(){
   const monthPending = useMemo(()=>{
     let total = 0;
     students.forEach(s=>{
+      if(s.status==='deleted') return; // a deleted student is never chased for money going forward
       const g = groupById(s.groupId);
       if(!g) return;
       if(!isPaid(s.id, currentMonth)) total += studentFee(s,g);
@@ -3501,6 +3520,7 @@ function PaymentsTab({students,groups,teachers,persistStudents,payments,persistP
 
   const visibleList = list.filter(s=>{
     if(!onlyOverdue) return true;
+    if(s.status==='deleted') return false; // a deleted student is never flagged as "needs chasing", even while still visible for their own month in the list above
     const g = groupById(s.groupId);
     const norm = normalizePaymentRecord(recordFor(s.id), studentFee(s,g));
     return !norm.paid;
@@ -6312,6 +6332,29 @@ function ReportsTab({students,groups,teachers,attendance,grades,payments,groupBy
                 ))}
               </tbody>
             </table>
+          )}
+
+          {stats.highlevelSessions && stats.highlevelSessions.length>0 && (
+            <React.Fragment>
+              <div className="section-title">🌟 حضور الهاي ليفل (منهج إضافي — مستقل عن الحضور العادي)</div>
+              <div className="card" style={{marginBottom:16}}>
+                <div className="stat-label">نسبة حضور الهاي ليفل</div>
+                <div className="stat-value">{stats.highlevelRate===null?'—':stats.highlevelRate+'%'}</div>
+              </div>
+              <table style={{marginBottom:16}}>
+                <thead><tr><th>اليوم</th><th>التاريخ</th><th>الوقت</th><th>الحضور</th></tr></thead>
+                <tbody>
+                  {stats.highlevelSessions.map(s=>(
+                    <tr key={s.date}>
+                      <td>{s.dayName}</td>
+                      <td>{s.date}</td>
+                      <td>{s.time||'—'}</td>
+                      <td>{s.status==='present'?<span className="badge badge-green">حاضر</span>:<span className="badge badge-rose">غائب</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </React.Fragment>
           )}
 
           <div className="section-title">درجات الاختبارات</div>
