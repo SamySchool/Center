@@ -150,6 +150,7 @@ tr:last-child td{border-bottom:none;}
 .badge-amber{background:var(--amber-bg); color:var(--amber);}
 .badge-rose{background:var(--rose-bg); color:var(--rose);}
 .badge-gray{background:#f0ebe4; color:var(--muted);}
+.badge-purple{background:#efe6fb; color:#7c3aed;}
 input,select,textarea{
   font-family:inherit; border:1.5px solid var(--border); border-radius:9px; padding:9px 11px; font-size:13.5px;
   width:100%; background:#fff; color:var(--ink);
@@ -441,8 +442,10 @@ function computeStudentMonthStats(student, month, attendance, grades, payments, 
     const time = checkinAt ? new Date(checkinAt).toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit',hour12:true}) : null;
     return {date:a.date, dayName, status, time};
   });
+  const highlevelPresentCount = highlevelSessions.filter(s=>s.status==='present').length;
+  const highlevelRate = highlevelSessions.length ? Math.round((highlevelPresentCount/highlevelSessions.length)*100) : null;
 
-  return {group, rate, absentDates, monthExams, examsAvg, paid, sessions, recitationAvg, homeworkDoneCount, homeworkTrackedCount, highlevelSessions};
+  return {group, rate, absentDates, monthExams, examsAvg, paid, sessions, recitationAvg, homeworkDoneCount, homeworkTrackedCount, highlevelSessions, highlevelRate};
 }
 
 function buildWhatsAppReportLink(student, month, stats, teacher){
@@ -452,9 +455,10 @@ function buildWhatsAppReportLink(student, month, stats, teacher){
     `مرحبًا 🌟 تقرير متابعة الابن/ة *${student.name}* لشهر ${monthLabel(month)} من SamySchool:`,
   ];
   if(teacher) lines.push(`👨‍🏫 المدرس: مستر ${teacher.name}`);
+  const hasHighlevel = stats.highlevelSessions && stats.highlevelSessions.length>0;
   lines.push(
     ``,
-    `📌 نسبة الحضور: ${stats.rate===null?'لا يوجد حصص مسجلة':stats.rate+'%'}`,
+    `📌 نسبة الحضور${hasHighlevel?' (الحصص العادية)':''}: ${stats.rate===null?'لا يوجد حصص مسجلة':stats.rate+'%'}`,
   );
   if(stats.absentDates.length>0) lines.push(`❌ أيام الغياب: ${stats.absentDates.join('، ')}`);
   lines.push(`📝 متوسط درجات الامتحانات: ${stats.examsAvg===null?'لا يوجد اختبارات':stats.examsAvg+'%'}`);
@@ -486,8 +490,9 @@ function buildWhatsAppReportLink(student, month, stats, teacher){
     });
   }
 
-  if(stats.highlevelSessions && stats.highlevelSessions.length>0){
-    lines.push(``, `🌟 حصص الهاي ليفل (منهج إضافي):`);
+  if(hasHighlevel){
+    lines.push(``, `🌟 حضور الهاي ليفل (منهج إضافي — مستقل عن الحضور العادي):`);
+    lines.push(`📌 نسبة حضور الهاي ليفل: ${stats.highlevelRate===null?'لا يوجد حصص مسجلة':stats.highlevelRate+'%'}`);
     stats.highlevelSessions.forEach(s=>{
       const statusTxt = s.status==='present'?'حاضر ✓':'غائب ✕';
       lines.push(`• ${s.dayName} ${s.date}${s.time?` — الساعة ${s.time}`:''}: ${statusTxt}`);
@@ -818,7 +823,7 @@ function QuickActionsBar({students,groups,teachers,persistGroups,payments,persis
       {active==='student' && (
         <Modal title="إضافة طالب جديد" onClose={close}>
           <StudentForm
-            student={{id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'}}
+            student={{id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],highLevelOnly:false,stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'}}
             groups={groups}
             onCancel={close}
             onSave={(data)=>{ const {isNew, ...clean} = data; persistStudents([...students, clean]); close(); }}
@@ -2118,7 +2123,7 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
     return matchDeleted && matchQ && matchG;
   });
 
-  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'});
+  const openNew = () => setEditing({id:uid(),isNew:true,name:'',phone:'',parentPhone:'',schoolName:'',educationType:EDUCATION_TYPES[0],highLevelOnly:false,stage:STAGES[0],groupId:groups[0]?groups[0].id:'',secondaryGroupId:'',feeOverride:'',notebookFeeAmount:'',notebookPaid:false,joinDate:todayISO(),notes:'',status:'active'});
 
   const save = async (data) => {
     const {isNew, ...clean} = data;
@@ -2207,7 +2212,7 @@ function StudentsTab({students,groups,teachers,persistStudents,payments,currentM
                 const deleted = s.status==='deleted';
                 return (
                   <tr key={s.id} style={(frozen||deleted)?{opacity:0.6}:{}}>
-                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}{s.secondaryGroupId && <span className="badge badge-amber" style={{marginRight:6}} title="بيحضر معاد من مجموعة تانية كمان">مختلط</span>}</td>
+                    <td className="student-row"><span className="avatar">{initials(s.name)}</span>{s.name}{s.secondaryGroupId && <span className="badge badge-amber" style={{marginRight:6}} title="بيحضر معاد من مجموعة تانية كمان">مختلط</span>}{s.highLevelOnly && <span className="badge badge-purple" style={{marginRight:6}} title="طالب هاي ليفل بس — مواعيده الخاصة">هاي ليفل بس</span>}</td>
                     <td>{g?g.name:<span className="muted">بدون مجموعة</span>}</td>
                     <td>{s.stage}</td>
                     <td><span style={{fontWeight:800,fontFamily:'monospace'}}>{studentCode(s.id)}</span></td>
@@ -2322,6 +2327,11 @@ function StudentForm({student,groups,onCancel,onSave}){
           </select>
         </Field>
       </div>
+      <div className="field" style={{display:'flex',alignItems:'center',gap:8}}>
+        <input type="checkbox" id="highLevelOnly" checked={!!f.highLevelOnly} onChange={e=>set('highLevelOnly',e.target.checked)} style={{width:'auto'}} />
+        <label htmlFor="highLevelOnly" style={{margin:0,cursor:'pointer'}}>طالب هاي ليفل بس (منهج إنجليزي إضافي مع مستر محمد سامي، في مواعيده الخاصة، من غير التزام بحضور عادي)</label>
+      </div>
+      {f.highLevelOnly && <div className="small muted" style={{marginTop:-8,marginBottom:12}}>هيظهر في روستر "حضور الهاي ليفل" حتى لو نوع تعليمه مش "لغات" أو "تجريبي"</div>}
       <div className="grid grid-2">
         <Field label="المرحلة الدراسية">
           <select value={f.stage} onChange={e=>set('stage',e.target.value)}>
@@ -2842,12 +2852,14 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
   // Regular roster = normal active students in the group, PLUS any student whose
   // `secondaryGroupId` points here (a mixed-schedule student who actually attends this group's
   // day even though they're officially enrolled in the other group of the same stage — see
-  // `attendanceRosterForGroup`). High-Level roster = only Mr. Mohamed Samy's (the owner's) own
-  // لغات/تجريبي students — they're the ones with the extra curriculum and the movable extra
-  // sessions for it — independent of the group's fixed schedule days.
+  // `attendanceRosterForGroup`). High-Level roster = Mr. Mohamed Samy's (the owner's) own
+  // لغات/تجريبي students, PLUS any student individually flagged `highLevelOnly` (e.g. a regular
+  // "حكومي" student who still takes ONLY the extra English High-Level sessions with him, on
+  // their own special timing, with no normal day-to-day attendance at all) — independent of
+  // the group's fixed schedule days either way.
   const fullRoster = attendanceRosterForGroup(groupId);
   const roster = mode==='highlevel'
-    ? fullRoster.filter(s=> (s.educationType==='لغات' || s.educationType==='تجريبي') && teacher && teacher.isOwner)
+    ? fullRoster.filter(s=> (s.educationType==='لغات' || s.educationType==='تجريبي' || s.highLevelOnly) && teacher && teacher.isOwner)
     : fullRoster;
 
   const existing = attendance.find(a=>a.groupId===groupId && a.date===date && (a.sessionType||'regular')===mode);
@@ -3014,7 +3026,7 @@ function AttendanceTab({groups,students,attendance,persistAttendance,studentsInG
                              : null;
                 return (
                   <tr key={s.id}>
-                    <td style={{fontWeight:800}}>{s.name}{s.secondaryGroupId===groupId && <span className="badge badge-amber" style={{marginRight:6,fontWeight:700}} title="أصلاً مسجل في مجموعة تانية، بس بيحضر هنا كمان">مختلط</span>}</td>
+                    <td style={{fontWeight:800}}>{s.name}{s.secondaryGroupId===groupId && <span className="badge badge-amber" style={{marginRight:6,fontWeight:700}} title="أصلاً مسجل في مجموعة تانية، بس بيحضر هنا كمان">مختلط</span>}{s.highLevelOnly && <span className="badge badge-purple" style={{marginRight:6,fontWeight:700}} title="طالب هاي ليفل بس — مواعيده الخاصة، من غير التزام بحضور عادي">هاي ليفل بس</span>}</td>
                     <td>
                       <button className={"att-toggle "+(st==='present'?'present':st==='absent'?'absent':'')} onClick={()=>toggle(s.id)}>
                         {st==='present'?'حاضر ✓':st==='absent'?'غائب ✕':'—'}
